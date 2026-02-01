@@ -2,12 +2,11 @@
 
 import logging
 import sys
-from typing import Optional
 
 from app.config import settings
 
 
-def setup_logger(name: Optional[str] = None) -> logging.Logger:
+def setup_logger(name: str | None = None) -> logging.Logger:
     """Set up and return a configured logger."""
     logger = logging.getLogger(name or __name__)
     logger.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
@@ -27,4 +26,4 @@ def setup_logger(name: Optional[str] = None) -> logging.Logger:
 
 
 # Default logger instance
-logger = setup_logger("invoice_digitalization")
+logger = setup_logger("document_delivery")

@@ -1,16 +1,12 @@
-"""Application configuration using Pydantic settings."""
+"""Application configuration."""
 
-import os
 from pathlib import Path
-from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables."""
-
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -18,85 +14,71 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Application
-    app_name: str = Field(default="Invoice Digitalization Platform")
-    app_version: str = Field(default="1.0.0")
-    debug: bool = Field(default=False)
-    log_level: str = Field(default="INFO")
+    app_name: str = "Document Delivery"
+    app_version: str = "1.0.0"
+    debug: bool = False
+    log_level: str = "INFO"
 
-    # Server
-    host: str = Field(default="0.0.0.0")
-    port: int = Field(default=8000)
+    host: str = "0.0.0.0"
+    port: int = 8000
 
-    # Security
-    tls_enabled: bool = Field(default=True)
-    tls_cert_path: Optional[str] = Field(default=None)
-    tls_key_path: Optional[str] = Field(default=None)
+    # Email
+    email_provider: str = "smtp"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True
+    smtp_from_email: str = "noreply@example.com"
+    smtp_from_name: str = "Document Delivery"
+    email_api_url: str | None = None
+    email_api_key: str | None = None
 
-    # Digital Signature
-    signing_cert_path: str = Field(..., description="Path to X.509 certificate for signing")
-    signing_key_path: str = Field(..., description="Path to private key for signing")
-    signing_key_password: Optional[str] = Field(default=None)
-    signing_algorithm: str = Field(default="SHA256")
+    # SMS
+    sms_provider: str = "api"
+    sms_api_url: str | None = None
+    sms_api_key: str | None = None
+    sms_sender_name: str = "DocDelivery"
 
-    # Email Service
-    email_provider: str = Field(default="smtp", description="smtp or api")
-    smtp_host: Optional[str] = Field(default=None)
-    smtp_port: int = Field(default=587)
-    smtp_user: Optional[str] = Field(default=None)
-    smtp_password: Optional[str] = Field(default=None)
-    smtp_use_tls: bool = Field(default=True)
-    smtp_from_email: str = Field(default="noreply@example.com")
-    smtp_from_name: str = Field(default="Invoice Digitalization")
-    email_api_url: Optional[str] = Field(default=None)
-    email_api_key: Optional[str] = Field(default=None)
+    # S3 (required for SMS download links)
+    s3_enabled: bool = False
+    s3_bucket_name: str | None = None
+    s3_region: str = "us-east-1"
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_endpoint_url: str | None = None
+    s3_presigned_url_expiration: int = 3600
+    s3_cleanup_retention_days: int = 7  # Days to keep documents before cleanup
 
-    # SMS Service
-    sms_provider: str = Field(default="api")
-    sms_api_url: str = Field(..., description="SMS API endpoint URL")
-    sms_api_key: str = Field(..., description="SMS API key")
-    sms_sender_name: str = Field(default="InvoiceSystem")
+    # Signing
+    private_key_pem: str | None = None
+    private_key_path: str | None = None
 
-    # Storage
-    upload_dir: str = Field(default="./uploads")
-    temp_dir: str = Field(default="./temp")
-    invoice_storage_dir: str = Field(default="./invoices")
+    # TSA (Trusted Timestamping Authority) - optional but recommended
+    # Free TSA services: http://timestamp.digicert.com, http://timestamp.sectigo.com
+    tsa_url: str | None = None  # TSA server URL (RFC 3161)
+    tsa_username: str | None = None  # Optional: TSA username if authentication required
+    tsa_password: str | None = None  # Optional: TSA password if authentication required
+    tsa_add_doctimestamp: bool = True  # Add RFC3161 DocTimeStamp signature when TSA is enabled
 
-    # Archival
-    archival_enabled: bool = Field(default=True)
-    archival_retention_years: int = Field(default=7)
-
-    @field_validator("signing_algorithm")
-    @classmethod
-    def validate_signing_algorithm(cls, v: str) -> str:
-        """Validate signing algorithm."""
-        allowed = ["SHA256", "SHA384", "SHA512"]
-        if v.upper() not in allowed:
-            raise ValueError(f"Signing algorithm must be one of {allowed}")
-        return v.upper()
+    # Visual signature stamp
+    signature_image_path: str = "assets/signature_stamp.png"
+    signature_position_x: float = 50.0  # X coordinate in points (from left)
+    signature_position_y: float = 50.0  # Y coordinate in points (from bottom)
+    signature_width: float | None = None  # Width in points (None = use image width)
+    signature_height: float | None = None  # Height in points (None = use image height)
+    signature_page: int = 0  # Page number (0-indexed, -1 for all pages)
 
     @field_validator("email_provider")
     @classmethod
-    def validate_email_provider(cls, v: str) -> str:
-        """Validate email provider."""
-        if v.lower() not in ["smtp", "api"]:
-            raise ValueError("Email provider must be 'smtp' or 'api'")
+    def _email_provider(cls, v: str) -> str:
+        if v.lower() not in ("smtp", "api"):
+            raise ValueError("email_provider must be 'smtp' or 'api'")
         return v.lower()
 
-    def get_signing_cert_path(self) -> Path:
-        """Get signing certificate path as Path object."""
-        return Path(self.signing_cert_path)
-
-    def get_signing_key_path(self) -> Path:
-        """Get signing key path as Path object."""
-        return Path(self.signing_key_path)
-
     def ensure_directories(self) -> None:
-        """Ensure all required directories exist."""
-        Path(self.upload_dir).mkdir(parents=True, exist_ok=True)
-        Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
-        Path(self.invoice_storage_dir).mkdir(parents=True, exist_ok=True)
+        Path("uploads").mkdir(parents=True, exist_ok=True)
+        Path("temp").mkdir(parents=True, exist_ok=True)
 
 
-# Global settings instance
 settings = Settings()

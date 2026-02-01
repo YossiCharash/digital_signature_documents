@@ -1,15 +1,15 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  invoice-digitalization:
+  document-delivery:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: invoice-digitalization
+    container_name: document-delivery
     ports:
       - "8000:8000"
     environment:
-      - APP_NAME=Invoice Digitalization Platform
+      - APP_NAME=Document Delivery
       - APP_VERSION=1.0.0
       - DEBUG=false
       - LOG_LEVEL=INFO
@@ -20,12 +20,10 @@ services:
     volumes:
       - ../app:/app/app
       - ../uploads:/app/uploads
-      - ../invoices:/app/invoices
       - ../temp:/app/temp
-      - ../certificates:/app/certificates
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s
       timeout: 10s
       retries: 3

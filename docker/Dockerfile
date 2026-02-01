@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 
 # Create necessary directories
-RUN mkdir -p /app/uploads /app/temp /app/invoices
+RUN mkdir -p /app/uploads /app/temp
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

@@ -3,58 +3,44 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "invoice-digitalization"
+name = "document-delivery"
 version = "1.0.0"
-description = "Production-grade invoice digitalization platform for Israeli Tax Authority compliance"
+description = "Send documents via email (attachment) or SMS (S3 download link)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "Proprietary"}
-authors = [
-    {name = "Invoice Digitalization Team"}
-]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Financial and Insurance Industry",
-    "Programming Language :: Python :: 3.12",
-    "Framework :: FastAPI",
-]
-
 dependencies = [
     "fastapi>=0.104.1",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "python-multipart>=0.0.6",
-    "PyPDF2>=3.0.1",
-    "pdfplumber>=0.10.3",
-    "pytesseract>=0.3.10",
-    "Pillow>=10.1.0",
-    "cryptography>=41.0.7",
-    "aiofiles>=23.2.1",
     "python-dotenv>=1.0.0",
     "httpx>=0.25.2",
-    "email-validator>=2.1.0",
+    "boto3>=1.34.0",
+    "cryptography>=41.0.0",
+    "endesive>=2.0.0",
+    "PyMuPDF>=1.23.0",
+    "Pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.3",
     "pytest-asyncio>=0.21.1",
-    "pytest-cov>=4.1.0",
-    "pytest-mock>=3.12.0",
     "black>=23.11.0",
     "ruff>=0.1.6",
     "mypy>=1.7.0",
-    "types-requests>=2.31.0.10",
 ]
 
 [tool.black]
 line-length = 100
-target-version = ['py312']
+target-version = ["py312"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
@@ -62,13 +48,8 @@ ignore = ["E501"]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 asyncio_mode = "auto"
-addopts = "-v --cov=app --cov-report=html --cov-report=term-missing"

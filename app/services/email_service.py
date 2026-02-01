@@ -1,13 +1,13 @@
-"""Email delivery service with SMTP and API support."""
+"""Email delivery service – sends documents as attachments (SMTP or API)."""
 
 import asyncio
-import json
+import base64
+import mimetypes
 import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import httpx
 
@@ -22,22 +22,21 @@ class EmailDeliveryError(Exception):
 
 
 class EmailService:
-    """Service for sending emails with invoice attachments."""
+    """Service for sending emails with document attachments (single responsibility)."""
 
     def __init__(
         self,
-        provider: Optional[str] = None,
-        smtp_host: Optional[str] = None,
-        smtp_port: Optional[int] = None,
-        smtp_user: Optional[str] = None,
-        smtp_password: Optional[str] = None,
-        smtp_use_tls: Optional[bool] = None,
-        smtp_from_email: Optional[str] = None,
-        smtp_from_name: Optional[str] = None,
-        api_url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        provider: str | None = None,
+        smtp_host: str | None = None,
+        smtp_port: int | None = None,
+        smtp_user: str | None = None,
+        smtp_password: str | None = None,
+        smtp_use_tls: bool | None = None,
+        smtp_from_email: str | None = None,
+        smtp_from_name: str | None = None,
+        api_url: str | None = None,
+        api_key: str | None = None,
     ):
-        """Initialize email service."""
         self.provider = provider or settings.email_provider
         self.smtp_host = smtp_host or settings.smtp_host
         self.smtp_port = smtp_port or settings.smtp_port
@@ -49,131 +48,178 @@ class EmailService:
         self.api_url = api_url or settings.email_api_url
         self.api_key = api_key or settings.email_api_key
 
-    async def send_invoice(
+    async def send_document(
         self,
         to_email: str,
-        invoice_data: dict,
-        invoice_number: str,
-        subject: Optional[str] = None,
-        body: Optional[str] = None,
+        document: bytes,
+        filename: str,
+        subject: str | None = None,
+        body: str | None = None,
+        from_name: str | None = None,
+        reply_to: str | None = None,
     ) -> bool:
-        """Send invoice via email."""
+        """Send document as email attachment."""
         try:
-            logger.info(f"Sending invoice {invoice_number} to {to_email}")
+            logger.info(f"Sending document {filename} to {to_email}")
 
             if self.provider == "smtp":
-                return await self._send_via_smtp(to_email, invoice_data, invoice_number, subject, body)
-            elif self.provider == "api":
-                return await self._send_via_api(to_email, invoice_data, invoice_number, subject, body)
-            else:
-                raise EmailDeliveryError(f"Unknown email provider: {self.provider}")
+                return await self._send_document_via_smtp(
+                    to_email, document, filename, subject, body, from_name, reply_to
+                )
+            if self.provider == "api":
+                return await self._send_document_via_api(
+                    to_email, document, filename, subject, body, from_name, reply_to
+                )
+            raise EmailDeliveryError(f"Unknown email provider: {self.provider}")
 
+        except EmailDeliveryError:
+            raise
         except Exception as e:
             logger.error(f"Email delivery failed: {e}")
             raise EmailDeliveryError(f"Email delivery failed: {e}") from e
 
-    async def _send_via_smtp(
+    def _content_type_for(self, filename: str) -> str:
+        ct, _ = mimetypes.guess_type(filename)
+        return ct or "application/octet-stream"
+
+    async def _send_document_via_smtp(
         self,
         to_email: str,
-        invoice_data: dict,
-        invoice_number: str,
-        subject: Optional[str],
-        body: Optional[str],
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
     ) -> bool:
-        """Send email via SMTP."""
-        if not self.smtp_host:
-            raise EmailDeliveryError("SMTP host not configured")
-
-        # Create message
-        msg = MIMEMultipart()
-        msg["From"] = f"{self.smtp_from_name} <{self.smtp_from_email}>"
-        msg["To"] = to_email
-        msg["Subject"] = subject or f"Digital Invoice {invoice_number}"
-
-        # Add body
-        email_body = body or f"Please find attached your digital invoice {invoice_number}."
-        msg.attach(MIMEText(email_body, "plain"))
-
-        # Add invoice as JSON attachment
-        invoice_json = json.dumps(invoice_data, indent=2, ensure_ascii=False)
-        attachment = MIMEApplication(invoice_json, _subtype="json")
-        attachment.add_header(
-            "Content-Disposition",
-            f'attachment; filename="invoice_{invoice_number}.json"',
-        )
-        msg.attach(attachment)
-
-        # Send via SMTP (run in executor since smtplib is blocking)
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None, self._send_smtp_sync, msg, invoice_number
+        # Validate SMTP host configuration
+        if not self.smtp_host or not self.smtp_host.strip():
+            raise EmailDeliveryError(
+                "SMTP host not configured. Please set SMTP_HOST in your .env file (e.g., SMTP_HOST=smtp.gmail.com)"
             )
 
-            logger.info(f"Invoice {invoice_number} sent successfully via SMTP")
-            return True
+        if not self.smtp_port:
+            raise EmailDeliveryError(
+                "SMTP port not configured. Please set SMTP_PORT in your .env file (e.g., SMTP_PORT=587)"
+            )
 
-        except Exception as e:
-            logger.error(f"SMTP send failed: {e}")
-            raise EmailDeliveryError(f"SMTP send failed: {e}") from e
-
-    def _send_smtp_sync(self, msg: MIMEMultipart, invoice_number: str) -> None:
-        """Synchronous SMTP send (runs in executor)."""
-        if self.smtp_use_tls:
-            server = smtplib.SMTP(self.smtp_host, self.smtp_port)
-            server.starttls()
+        msg = MIMEMultipart()
+        # Use from_name if provided (even if empty string), otherwise fall back to smtp_from_name
+        if from_name is not None:
+            # from_name was explicitly provided (could be empty string)
+            effective_from_name = from_name.strip() if from_name else ""
         else:
-            server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port)
+            # from_name was not provided, use default
+            effective_from_name = (self.smtp_from_name or "").strip()
 
-        if self.smtp_user and self.smtp_password:
-            server.login(self.smtp_user, self.smtp_password)
+        if effective_from_name:
+            # Use Header to ensure proper encoding of Hebrew characters in From name
+            from email.header import Header
 
-        server.send_message(msg)
-        server.quit()
+            from_name_encoded = str(Header(effective_from_name, "utf-8"))
+            msg["From"] = f"{from_name_encoded} <{self.smtp_from_email}>"
+        else:
+            msg["From"] = f"{self.smtp_from_email}"
+        msg["To"] = to_email
+        msg["Subject"] = subject or f"Document: {filename}"
+        if reply_to and reply_to.strip():
+            msg["Reply-To"] = reply_to.strip()
 
-    async def _send_via_api(
+        email_body = body or f"Please find attached: {filename}."
+        msg.attach(MIMEText(email_body, "plain"))
+
+        if document and filename:
+            main_type, sub_type = self._content_type_for(filename).split("/", 1)
+            attachment = MIMEApplication(document, _subtype=sub_type)
+            attachment.add_header(
+                "Content-Disposition",
+                f'attachment; filename="{filename}"',
+            )
+            msg.attach(attachment)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._send_smtp_sync, msg)
+        logger.info(f"Document {filename} sent via SMTP to {to_email}")
+        return True
+
+    def _send_smtp_sync(self, msg: MIMEMultipart) -> None:
+        if not self.smtp_host:
+            raise EmailDeliveryError("SMTP host not configured")
+        try:
+            if self.smtp_use_tls:
+                server = smtplib.SMTP(self.smtp_host, self.smtp_port)
+                server.starttls()
+            else:
+                server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port)
+
+            if self.smtp_user and self.smtp_password:
+                server.login(self.smtp_user, self.smtp_password)
+            server.send_message(msg)
+            server.quit()
+        except OSError as e:
+            # Handle DNS resolution errors and connection errors
+            error_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
+            if error_code == 11001 or (hasattr(e, "errno") and e.errno in (11001, -2, -3)):
+                raise EmailDeliveryError(
+                    f"Failed to resolve SMTP host '{self.smtp_host}'. "
+                    f"Please check that SMTP_HOST is set correctly in your .env file. "
+                    f"Common values: smtp.gmail.com, smtp.outlook.com, smtp.mail.yahoo.com"
+                ) from e
+            raise EmailDeliveryError(
+                f"SMTP connection failed to {self.smtp_host}:{self.smtp_port}: {e}"
+            ) from e
+        except smtplib.SMTPAuthenticationError as e:
+            raise EmailDeliveryError(
+                "SMTP authentication failed. Please check SMTP_USER and SMTP_PASSWORD in your .env file"
+            ) from e
+        except smtplib.SMTPException as e:
+            raise EmailDeliveryError(f"SMTP error: {e}") from e
+
+    async def _send_document_via_api(
         self,
         to_email: str,
-        invoice_data: dict,
-        invoice_number: str,
-        subject: Optional[str],
-        body: Optional[str],
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
     ) -> bool:
-        """Send email via API."""
         if not self.api_url:
             raise EmailDeliveryError("Email API URL not configured")
         if not self.api_key:
             raise EmailDeliveryError("Email API key not configured")
 
-        # Prepare payload
-        invoice_json = json.dumps(invoice_data, ensure_ascii=False)
-
-        payload = {
+        payload: dict[str, Any] = {
             "to": to_email,
-            "subject": subject or f"Digital Invoice {invoice_number}",
-            "body": body or f"Please find attached your digital invoice {invoice_number}.",
-            "attachments": [
-                {
-                    "filename": f"invoice_{invoice_number}.json",
-                    "content": invoice_json,
-                    "content_type": "application/json",
-                }
-            ],
+            "subject": subject or f"Document: {filename}" if filename else subject or "Document",
+            "body": (
+                body or f"Please find attached: {filename}." if filename else body or "Document"
+            ),
+            "attachments": [],
         }
-
+        # Optional metadata some email APIs support (safe to include if ignored)
+        if from_name and from_name.strip():
+            payload["from_name"] = from_name.strip()
+        if reply_to and reply_to.strip():
+            payload["reply_to"] = reply_to.strip()
+        if document and filename:
+            ct = self._content_type_for(filename)
+            payload["attachments"] = [
+                {
+                    "filename": filename,
+                    "content": base64.b64encode(document).decode("ascii"),
+                    "content_type": ct,
+                }
+            ]
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(self.api_url, json=payload, headers=headers, timeout=30.0)
-                response.raise_for_status()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(self.api_url, json=payload, headers=headers, timeout=30.0)
+            response.raise_for_status()
 
-            logger.info(f"Invoice {invoice_number} sent successfully via API")
-            return True
-
-        except httpx.HTTPError as e:
-            logger.error(f"Email API send failed: {e}")
-            raise EmailDeliveryError(f"Email API send failed: {e}") from e
+        logger.info(f"Document {filename} sent via API to {to_email}")
+        return True

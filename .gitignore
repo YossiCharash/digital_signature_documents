@@ -69,3 +69,9 @@ Thumbs.db
 invoices/
 temp/
 uploads/
+
+# Local documents and generated output (do not commit)
+*.pdf
+*_grid_*.png
+signature_grid_page1.png
+small_stamp_grid_page1.png
