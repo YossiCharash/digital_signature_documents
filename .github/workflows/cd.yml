@@ -28,7 +28,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: invoice-digitalization
+          images: ${{ secrets.DOCKER_USERNAME }}/invoice-digitalization
           tags: |
             type=ref,event=branch
             type=ref,event=pr
