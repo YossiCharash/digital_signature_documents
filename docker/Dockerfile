@@ -9,6 +9,14 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements
 COPY requirements.txt .
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    libpcsclite-dev \
+    pcscd \
+    pcsc-tools \
+    opensc \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
