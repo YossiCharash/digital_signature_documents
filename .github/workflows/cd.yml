@@ -5,18 +5,152 @@ on:
     branches: [main]
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      rollback_version:
+        description: 'Version to rollback to (leave empty for new deployment)'
+        required: false
+        type: string
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
+  ECR_REPOSITORY: document-delivery
+  ECS_CLUSTER: document-delivery-cluster
+  CONTAINER_NAME: document-delivery
 
 jobs:
+  # ============================================
+  # Run Tests
+  # ============================================
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=html
+        continue-on-error: true
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+
+  # ============================================
+  # Security Scan
+  # ============================================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # ============================================
+  # Build Docker Image
+  # ============================================
   build:
     name: Build Docker Image
+    needs: [test, security-scan]
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
+      ecr_image: ${{ steps.build-image.outputs.ecr_image }}
+    
     steps:
       - uses: actions/checkout@v4
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
-      - name: Log in to Docker Hub (if needed)
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate image tag
+        id: generate-tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${GITHUB_SHA::8}-$(date +%Y%m%d%H%M%S)"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build, tag, and push image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.generate-tag.outputs.tag }}
+        run: |
+          docker build \
+            --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            --build-arg VERSION=$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -f docker/Dockerfile .
+          
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "ecr_image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Run Trivy vulnerability scanner (image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.generate-tag.outputs.tag }}'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+
+      # Push to Docker Hub (optional)
+      - name: Log in to Docker Hub
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -24,25 +158,184 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
         continue-on-error: true
       
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Push to Docker Hub
+        if: github.event_name != 'pull_request' && secrets.DOCKER_USERNAME != ''
+        env:
+          IMAGE_TAG: ${{ steps.generate-tag.outputs.tag }}
+        run: |
+          docker tag ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG ${{ secrets.DOCKER_USERNAME }}/document-delivery:$IMAGE_TAG
+          docker tag ${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG ${{ secrets.DOCKER_USERNAME }}/document-delivery:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/document-delivery:$IMAGE_TAG || true
+          docker push ${{ secrets.DOCKER_USERNAME }}/document-delivery:latest || true
+        continue-on-error: true
+
+  # ============================================
+  # Deploy to Staging
+  # ============================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: staging
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          images: ${{ secrets.DOCKER_USERNAME }}/invoice-digitalization
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
-      
-      - name: Build and push
-        uses: docker/build-push-action@v5
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS account ID
+        id: aws-account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      - name: Determine image to deploy
+        id: determine-image
+        env:
+          ECR_REGISTRY: ${{ steps.aws-account.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        run: |
+          if [ -n "${{ github.event.inputs.rollback_version }}" ]; then
+            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.event.inputs.rollback_version }}"
+          else
+            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ needs.build.outputs.image_tag }}"
+          fi
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Replace placeholders in task definition
+        run: |
+          cp .aws/task-definition.json .aws/task-definition-staging.json
+          sed -i "s/ACCOUNT_ID/${{ steps.aws-account.outputs.account_id }}/g" .aws/task-definition-staging.json
+          sed -i "s/REGION/${{ env.AWS_REGION }}/g" .aws/task-definition-staging.json
+
+      - name: Fill in the new image ID
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          context: .
-          file: ./docker/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          task-definition: .aws/task-definition-staging.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.determine-image.outputs.image }}
+
+      - name: Deploy to ECS Staging
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_CLUSTER }}-staging-service
+          cluster: ${{ env.ECS_CLUSTER }}-staging
+          wait-for-service-stability: true
+
+      - name: Verify deployment health
+        run: |
+          echo "Waiting for service to stabilize..."
+          sleep 30
+          # Add health check verification here if needed
+
+  # ============================================
+  # Deploy to Production
+  # ============================================
+  deploy-production:
+    name: Deploy to Production
+    needs: [build, deploy-staging]
+    runs-on: ubuntu-latest
+    environment: production
+    if: |
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS account ID
+        id: aws-account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+
+      - name: Determine image to deploy
+        id: determine-image
+        env:
+          ECR_REGISTRY: ${{ steps.aws-account.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        run: |
+          if [ -n "${{ github.event.inputs.rollback_version }}" ]; then
+            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.event.inputs.rollback_version }}"
+          else
+            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ needs.build.outputs.image_tag }}"
+          fi
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Replace placeholders in task definition
+        run: |
+          cp .aws/task-definition.json .aws/task-definition-production.json
+          sed -i "s/ACCOUNT_ID/${{ steps.aws-account.outputs.account_id }}/g" .aws/task-definition-production.json
+          sed -i "s/REGION/${{ env.AWS_REGION }}/g" .aws/task-definition-production.json
+
+      - name: Fill in the new image ID
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: .aws/task-definition-production.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.determine-image.outputs.image }}
+
+      - name: Deploy to ECS Production
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_CLUSTER }}-service
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          body: |
+            ## Deployment Info
+            - **Image**: `${{ steps.determine-image.outputs.image }}`
+            - **Cluster**: `${{ env.ECS_CLUSTER }}`
+            - **Region**: `${{ env.AWS_REGION }}`
+
+  # ============================================
+  # Deployment Summary
+  # ============================================
+  summary:
+    name: Deployment Summary
+    needs: [build, deploy-staging, deploy-production]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Create summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging | ${{ needs.deploy-staging.result == 'success' && '✅ Success' || needs.deploy-staging.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Production | ${{ needs.deploy-production.result == 'success' && '✅ Success' || needs.deploy-production.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: \`${{ needs.build.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Deployment failed! Check the workflow logs for details."

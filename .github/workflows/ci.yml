@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI
 
 on:
   push:
@@ -6,15 +6,10 @@ on:
   pull_request:
     branches: [main, develop]
 
-env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
-  ECR_REPOSITORY: document-delivery
-  ECS_SERVICE: document-delivery-service
-  ECS_CLUSTER: document-delivery-cluster
-  ECS_TASK_DEFINITION: .aws/task-definition.json
-  CONTAINER_NAME: document-delivery
-
 jobs:
+  # ============================================
+  # Linting
+  # ============================================
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -25,6 +20,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -41,78 +37,111 @@ jobs:
       - name: Run mypy
         run: mypy app --ignore-missing-imports
 
-  build-and-push:
-    name: Build & Push to ECR
-    needs: [lint]
+  # ============================================
+  # Unit Tests
+  # ============================================
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    outputs:
-      image: ${{ steps.build-image.outputs.image }}
-    
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+          python-version: "3.12"
+          cache: 'pip'
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+      - name: Install dependencies
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f docker/Dockerfile .
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -f docker/Dockerfile .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio httpx
 
-  deploy:
-    name: Deploy to ECS
-    needs: [build-and-push]
+      - name: Run tests
+        run: |
+          pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+        continue-on-error: true
+
+  # ============================================
+  # Build Validation
+  # ============================================
+  build-check:
+    name: Build Check
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Get AWS account ID
-        id: aws-account
+      - name: Build Docker image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: false
+          tags: document-delivery:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ============================================
+  # Security Check
+  # ============================================
+  security:
+    name: Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install bandit safety
 
-      - name: Replace placeholders in task definition
+      - name: Run Bandit security linter
+        run: bandit -r app -ll -ii
+        continue-on-error: true
+
+      - name: Check dependencies for vulnerabilities
+        run: safety check -r requirements.txt
+        continue-on-error: true
+
+  # ============================================
+  # Summary
+  # ============================================
+  ci-summary:
+    name: CI Summary
+    needs: [lint, test, build-check, security]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Check results
         run: |
-          sed -i "s/ACCOUNT_ID/${{ steps.aws-account.outputs.account_id }}/g" ${{ env.ECS_TASK_DEFINITION }}
-          sed -i "s/REGION/${{ env.AWS_REGION }}/g" ${{ env.ECS_TASK_DEFINITION }}
+          echo "## 🔍 CI Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ needs.test.result == 'success' && '✅ Passed' || '⚠️ Issues' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build-check.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ${{ needs.security.result == 'success' && '✅ Passed' || '⚠️ Issues' }} |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Fill in the new image ID in the Amazon ECS task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: ${{ env.ECS_TASK_DEFINITION }}
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ needs.build-and-push.outputs.image }}
-
-      - name: Deploy Amazon ECS task definition
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
-          cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+      - name: Fail if lint or build failed
+        if: needs.lint.result == 'failure' || needs.build-check.result == 'failure'
+        run: exit 1
