@@ -152,7 +152,7 @@ jobs:
         continue-on-error: true
       
       - name: Push to Docker Hub
-        if: github.event_name != 'pull_request' && secrets.DOCKER_USERNAME != ''
+        if: github.event_name != 'pull_request'
         env:
           IMAGE_TAG: ${{ steps.generate-tag.outputs.tag }}
         run: |
