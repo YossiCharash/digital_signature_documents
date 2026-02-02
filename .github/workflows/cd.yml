@@ -187,6 +187,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Debug – list ECS clusters and services in this region
+        run: |
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "Looking for cluster: ${{ env.ECS_CLUSTER }}, service: ${{ env.ECS_SERVICE }}"
+          echo "--- Clusters in region ---"
+          aws ecs list-clusters --region ${{ env.AWS_REGION }} --output table || true
+          echo "--- Services in cluster (if exists) ---"
+          aws ecs list-services --cluster ${{ env.ECS_CLUSTER }} --region ${{ env.AWS_REGION }} --output table || true
+          echo "--- Describe service ---"
+          aws ecs describe-services --cluster ${{ env.ECS_CLUSTER }} --services ${{ env.ECS_SERVICE }} --region ${{ env.AWS_REGION }} --output json || true
+
       - name: Get AWS account ID
         id: aws-account
         run: |
