@@ -7,16 +7,8 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'Environment to deploy to'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
       rollback_version:
-        description: 'Version to rollback to (leave empty for new deployment)'
+        description: 'Image tag to rollback to (e.g. abc12345-20250101120000). Leave empty for latest.'
         required: false
         type: string
 
@@ -24,6 +16,7 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
   ECR_REPOSITORY: document-delivery
   ECS_CLUSTER: document-delivery-cluster
+  ECS_SERVICE: document-delivery-service
   CONTAINER_NAME: document-delivery
 
 jobs:
@@ -170,84 +163,16 @@ jobs:
         continue-on-error: true
 
   # ============================================
-  # Deploy to Staging
+  # Deploy to ECS (cluster: document-delivery-cluster, service: document-delivery-service)
   # ============================================
-  deploy-staging:
-    name: Deploy to Staging
+  deploy:
+    name: Deploy to ECS
     needs: [build]
     runs-on: ubuntu-latest
-    environment: staging
     if: |
       (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
-    
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Get AWS account ID
-        id: aws-account
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
-
-      - name: Determine image to deploy
-        id: determine-image
-        env:
-          ECR_REGISTRY: ${{ steps.aws-account.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
-        run: |
-          if [ -n "${{ github.event.inputs.rollback_version }}" ]; then
-            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ github.event.inputs.rollback_version }}"
-          else
-            IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${{ needs.build.outputs.image_tag }}"
-          fi
-          echo "image=$IMAGE" >> $GITHUB_OUTPUT
-
-      - name: Replace placeholders in task definition
-        run: |
-          cp .aws/task-definition.json .aws/task-definition-staging.json
-          sed -i "s/ACCOUNT_ID/${{ steps.aws-account.outputs.account_id }}/g" .aws/task-definition-staging.json
-          sed -i "s/REGION/${{ env.AWS_REGION }}/g" .aws/task-definition-staging.json
-
-      - name: Fill in the new image ID
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
-        with:
-          task-definition: .aws/task-definition-staging.json
-          container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ steps.determine-image.outputs.image }}
-
-      - name: Deploy to ECS Staging
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_CLUSTER }}-staging-service
-          cluster: ${{ env.ECS_CLUSTER }}-staging
-          wait-for-service-stability: true
-
-      - name: Verify deployment health
-        run: |
-          echo "Waiting for service to stabilize..."
-          sleep 30
-          # Add health check verification here if needed
-
-  # ============================================
-  # Deploy to Production
-  # ============================================
-  deploy-production:
-    name: Deploy to Production
-    needs: [build, deploy-staging]
-    runs-on: ubuntu-latest
-    environment: production
-    if: |
       startsWith(github.ref, 'refs/tags/v') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+      github.event_name == 'workflow_dispatch'
     
     steps:
       - uses: actions/checkout@v4
@@ -265,6 +190,10 @@ jobs:
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
 
+      - name: Ensure ECS cluster exists
+        run: |
+          aws ecs create-cluster --cluster-name ${{ env.ECS_CLUSTER }} --region ${{ env.AWS_REGION }} || true
+
       - name: Determine image to deploy
         id: determine-image
         env:
@@ -279,23 +208,23 @@ jobs:
 
       - name: Replace placeholders in task definition
         run: |
-          cp .aws/task-definition.json .aws/task-definition-production.json
-          sed -i "s/ACCOUNT_ID/${{ steps.aws-account.outputs.account_id }}/g" .aws/task-definition-production.json
-          sed -i "s/REGION/${{ env.AWS_REGION }}/g" .aws/task-definition-production.json
+          cp .aws/task-definition.json .aws/task-definition-deploy.json
+          sed -i "s/ACCOUNT_ID/${{ steps.aws-account.outputs.account_id }}/g" .aws/task-definition-deploy.json
+          sed -i "s/REGION/${{ env.AWS_REGION }}/g" .aws/task-definition-deploy.json
 
       - name: Fill in the new image ID
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: .aws/task-definition-production.json
+          task-definition: .aws/task-definition-deploy.json
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.determine-image.outputs.image }}
 
-      - name: Deploy to ECS Production
+      - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v1
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_CLUSTER }}-service
+          service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
 
@@ -315,7 +244,7 @@ jobs:
   # ============================================
   summary:
     name: Deployment Summary
-    needs: [build, deploy-staging, deploy-production]
+    needs: [build, deploy]
     runs-on: ubuntu-latest
     if: always()
     
@@ -327,10 +256,10 @@ jobs:
           echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Build | ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Staging | ${{ needs.deploy-staging.result == 'success' && '✅ Success' || needs.deploy-staging.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Production | ${{ needs.deploy-production.result == 'success' && '✅ Success' || needs.deploy-production.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ${{ needs.deploy.result == 'success' && '✅ Success' || needs.deploy.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster**: \`${{ env.ECS_CLUSTER }}\` | **Service**: \`${{ env.ECS_SERVICE }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Image Tag**: \`${{ needs.build.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by**: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
