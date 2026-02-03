@@ -106,14 +106,17 @@ async def send_document_email(
         else:
             email_body = body or 'שלום רב!\n\nהקבלה מצו"ב למייל\n\nתודה'
 
+    # Use normalized filename with .PDF extension for email attachment
+    pdf_filename = _pdf_attachment_filename(file.filename)
+
     # Send email to client - use business_name as from_name
     logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
     try:
         await _email_service.send_document(
             to_email=email,
             document=content,
-            filename=file.filename,
-            subject=effective_subject or f"Document: {file.filename}",
+            filename=pdf_filename,
+            subject=effective_subject or f"Document: {pdf_filename}",
             body=email_body,
             from_name=business_name,  # This will be the sender name in the email
             reply_to=business_email,
@@ -139,8 +142,8 @@ async def send_document_email(
             await _email_service.send_document(
                 to_email=business_email_trimmed,
                 document=content,
-                filename=file.filename,
-                subject=effective_subject or f"Document: {file.filename}",
+                filename=pdf_filename,
+                subject=effective_subject or f"Document: {pdf_filename}",
                 body=email_body,
                 from_name=business_name,
                 reply_to=business_email_trimmed,
@@ -162,7 +165,7 @@ async def send_document_email(
         "delivery": "email",
         "recipient": email,
         **({"business_recipient": business_email} if business_email else {}),
-        "filename": file.filename,
+        "filename": pdf_filename,
     }
 
 
