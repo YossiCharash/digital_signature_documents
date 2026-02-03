@@ -1,14 +1,12 @@
-name: CD
+# CD ל-AWS – לא פעיל. הפריסה מתבצעת ב-Render (ראו docs/DEPLOY_RENDER.md).
+name: CD (AWS – disabled)
 
 on:
-  push:
-    branches: [main]
-    tags:
-      - 'v*'
+  # push/tags כבויים – פריסה ב-Render
   workflow_dispatch:
     inputs:
       rollback_version:
-        description: 'Image tag to rollback to (e.g. abc12345-20250101120000). Leave empty for latest.'
+        description: "Image tag to rollback to. Leave empty for latest. (AWS only)"
         required: false
         type: string
 

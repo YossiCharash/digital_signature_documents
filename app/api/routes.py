@@ -18,8 +18,11 @@ router = APIRouter(tags=["documents"])
 
 def _pdf_attachment_filename(original_filename: str) -> str:
     """Normalize filename so PDF attachment has extension .PDF (for email and S3)."""
-    base, _ = (original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, ""))
+    base, _ = (
+        original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, "")
+    )
     return f"{base}.PDF" if base else "document.PDF"
+
 
 _email_deliverer = EmailDocumentDeliverer()
 _sms_deliverer = SMSDocumentDeliverer()
