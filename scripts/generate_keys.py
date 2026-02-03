@@ -19,6 +19,7 @@ def generate_rsa_key_pair(key_size: int = 2048) -> tuple[rsa.RSAPrivateKey, rsa.
     return private_key, public_key
 
 
+
 def save_private_key(key: rsa.RSAPrivateKey, path: Path) -> None:
     """Save private key to file in PEM format."""
     pem = key.private_bytes(
