@@ -139,21 +139,34 @@ class EmailService:
         email_body = body or f"Please find attached: {filename}."
         msg.attach(MIMEText(email_body, "plain"))
 
-        if document and filename:
-            main_type, sub_type = self._content_type_for(filename).split("/", 1)
+        if document:
+            effective_filename = filename or "document.pdf"
+            main_type, sub_type = self._content_type_for(effective_filename).split("/", 1)
             attachment = MIMEApplication(document, _subtype=sub_type)
-            ascii_filename = self._ascii_fallback_filename(filename)
+            ascii_filename = self._ascii_fallback_filename(effective_filename)
             attachment.add_header(
                 "Content-Disposition",
                 "attachment",
                 filename=ascii_filename,
             )
+            attachment.add_header(
+                "Content-Type",
+                f"{main_type}/{sub_type}",
+                name=ascii_filename,
+            )
             # Add RFC2231-encoded UTF-8 filename for non-ASCII names
-            if filename != ascii_filename:
+            if effective_filename != ascii_filename:
                 attachment.set_param(
                     "filename",
-                    filename,
+                    effective_filename,
                     header="Content-Disposition",
+                    charset="utf-8",
+                    language="",
+                )
+                attachment.set_param(
+                    "name",
+                    effective_filename,
+                    header="Content-Type",
                     charset="utf-8",
                     language="",
                 )
