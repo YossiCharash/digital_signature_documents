@@ -85,13 +85,22 @@ class EmailService:
 
     def _ascii_fallback_filename(self, filename: str) -> str:
         """Return ASCII-only fallback filename for email clients."""
+        # Replace non-ASCII characters with underscore
         safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename).strip()
-        base, ext = safe.rsplit(".", 1) if "." in safe else (safe, "")
-        if not base:
-            return "document.pdf"
-        if not ext:
-            return f"{base}.pdf"
-        return safe
+        
+        # If the result is mostly underscores (meaning original was mostly non-ASCII),
+        # or empty, fall back to a generic name but keep extension if possible.
+        base_match = re.match(r"^(.*)\.([a-zA-Z0-9]+)$", safe)
+        if base_match:
+            base, ext = base_match.groups()
+        else:
+            base, ext = safe, ""
+            
+        # Check if base is just underscores/dots or empty
+        if not base or all(c in "_." for c in base):
+            return f"document.{ext}" if ext else "document.pdf"
+            
+        return safe if ext else f"{safe}.pdf"
 
     async def _send_document_via_smtp(
         self,
