@@ -173,8 +173,14 @@ class SigningService:
             # Open PDF
             pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
 
-            # Load signature image
+            # Load signature image (resolve path so it works from CWD or from project root / Docker)
             signature_path = Path(settings.signature_image_path)
+            if not signature_path.is_absolute() and not signature_path.exists():
+                # Try project root: parent of app package (e.g. /app when running in Docker)
+                _app_root = Path(__file__).resolve().parent.parent.parent
+                fallback = _app_root / settings.signature_image_path
+                if fallback.exists():
+                    signature_path = fallback
             if not signature_path.exists():
                 logger.warning(
                     f"Signature image not found at {signature_path}, skipping visual signature"

@@ -15,6 +15,12 @@ from app.utils.validators import validate_email, validate_phone_number
 
 router = APIRouter(tags=["documents"])
 
+
+def _pdf_attachment_filename(original_filename: str) -> str:
+    """Normalize filename so PDF attachment has extension .PDF (for email and S3)."""
+    base, _ = (original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, ""))
+    return f"{base}.PDF" if base else "document.PDF"
+
 _email_deliverer = EmailDocumentDeliverer()
 _sms_deliverer = SMSDocumentDeliverer()
 _signing_service: SigningService | None = None
@@ -260,8 +266,9 @@ async def sign_and_email(
         # Sign PDF and get signed PDF bytes with embedded signature
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
-        # Use original filename for S3
-        s3_filename = file.filename
+        # Use normalized filename with .PDF extension for S3 and email
+        pdf_filename = _pdf_attachment_filename(file.filename)
+        s3_filename = pdf_filename
 
         # Upload signed PDF to S3 with metadata
         metadata = {
@@ -320,8 +327,8 @@ async def sign_and_email(
         await _email_service.send_document(
             to_email=email,
             document=signed_content,
-            filename=file.filename,
-            subject=effective_subject or f"מסמך חתום: {file.filename}",
+            filename=pdf_filename,
+            subject=effective_subject or f"מסמך חתום: {pdf_filename}",
             body=email_body,
             from_name=b_name,
             reply_to=b_email,
@@ -341,8 +348,8 @@ async def sign_and_email(
                 await _email_service.send_document(
                     to_email=b_email,
                     document=signed_content,
-                    filename=file.filename,
-                    subject=effective_subject or f"מסמך חתום: {file.filename}",
+                    filename=pdf_filename,
+                    subject=effective_subject or f"מסמך חתום: {pdf_filename}",
                     body=email_body,
                     from_name=b_name,
                     reply_to=b_email,
@@ -372,7 +379,7 @@ async def sign_and_email(
             operation="sign-and-email",
             document_hash=signature_data["hash"],
             recipient=email,
-            filename=file.filename,
+            filename=pdf_filename,
             metadata=metadata,
         )
 
@@ -380,7 +387,7 @@ async def sign_and_email(
             "status": "signed_and_sent",
             "delivery": "email",
             "recipient": email,
-            "filename": file.filename,
+            "filename": pdf_filename,
             "s3_key": s3_filename,
             "download_url": download_url,
             "signature": {
@@ -455,8 +462,9 @@ async def sign_and_sms(
         # Sign PDF and get signed PDF bytes with embedded signature
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
-        # Use original filename for S3
-        s3_filename = file.filename
+        # Use normalized filename with .PDF extension for S3
+        pdf_filename = _pdf_attachment_filename(file.filename)
+        s3_filename = pdf_filename
 
         # Upload signed PDF to S3 with metadata
         metadata = {
@@ -488,7 +496,7 @@ async def sign_and_sms(
             operation="sign-and-sms",
             document_hash=signature_data["hash"],
             recipient=phone,
-            filename=file.filename,
+            filename=pdf_filename,
             metadata={"s3_key": s3_filename, "signature": signature_data["signature"]},
         )
 
@@ -496,7 +504,7 @@ async def sign_and_sms(
             "status": "signed_and_sent",
             "delivery": "sms",
             "recipient": phone,
-            "filename": file.filename,
+            "filename": pdf_filename,
             "s3_key": s3_filename,
             "download_url": download_url,
             "signature": {

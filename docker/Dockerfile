@@ -23,6 +23,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
+# Copy assets (signature stamp image) so visual signature is applied in container
+COPY assets/ ./assets/
 
 # Create necessary directories
 RUN mkdir -p /app/uploads /app/temp
@@ -31,8 +33,9 @@ RUN mkdir -p /app/uploads /app/temp
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Expose port
+# Render sets PORT at runtime; default 8000 for local
+ENV PORT=8000
 EXPOSE 8000
 
-# Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run application (use PORT so Render can inject its port)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
