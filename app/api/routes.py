@@ -1,5 +1,6 @@
 """API routes: send document via email or SMS."""
 
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -22,6 +23,17 @@ def _pdf_attachment_filename(original_filename: str) -> str:
         original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, "")
     )
     return f"{base}.PDF" if base else "document.PDF"
+
+
+def _email_attachment_filename(business_name: str | None, original_filename: str) -> str:
+    """Use business name as attachment filename with .PDF when provided, else normalized file name."""
+    if business_name:
+        # Keep letters (incl. Hebrew), digits, spaces, dots, hyphens; replace path/shell-unsafe chars
+        safe = re.sub(r'[\\/:*?"<>|]', "_", business_name.strip()).strip()
+        if safe:
+            base = safe.rsplit(".", 1)[0] if "." in safe else safe
+            return f"{base}.PDF" if base else "document.PDF"
+    return _pdf_attachment_filename(original_filename)
 
 
 _email_deliverer = EmailDocumentDeliverer()
@@ -106,8 +118,8 @@ async def send_document_email(
         else:
             email_body = body or 'שלום רב!\n\nהקבלה מצו"ב למייל\n\nתודה'
 
-    # Use normalized filename with .PDF extension for email attachment
-    pdf_filename = _pdf_attachment_filename(file.filename)
+    # Use business name as attachment filename (with .PDF) when provided, else from file
+    pdf_filename = _email_attachment_filename(business_name_text, file.filename)
 
     # Send email to client - use business_name as from_name
     logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
@@ -272,9 +284,8 @@ async def sign_and_email(
         # Sign PDF and get signed PDF bytes with embedded signature
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
-        # Use normalized filename with .PDF extension for S3 and email
-        pdf_filename = _pdf_attachment_filename(file.filename)
-        s3_filename = pdf_filename
+        # S3 key: normalized from file name (stable for storage/URLs)
+        s3_filename = _pdf_attachment_filename(file.filename)
 
         # Upload signed PDF to S3 with metadata
         metadata = {
@@ -305,6 +316,9 @@ async def sign_and_email(
         b_name = sanitize_param(business_name)
         b_email = sanitize_param(business_email)
 
+        # Email attachment filename: business name with .PDF when provided
+        attachment_filename = _email_attachment_filename(b_name, file.filename)
+
         # Prepare email body with business name - always include business name if provided
         business_name_text = b_name or ""
         client_name_text = (client_name or "").strip()
@@ -333,8 +347,8 @@ async def sign_and_email(
         await _email_service.send_document(
             to_email=email,
             document=signed_content,
-            filename=pdf_filename,
-            subject=effective_subject or f"מסמך חתום: {pdf_filename}",
+            filename=attachment_filename,
+            subject=effective_subject or f"מסמך חתום: {attachment_filename}",
             body=email_body,
             from_name=b_name,
             reply_to=b_email,
@@ -354,8 +368,8 @@ async def sign_and_email(
                 await _email_service.send_document(
                     to_email=b_email,
                     document=signed_content,
-                    filename=pdf_filename,
-                    subject=effective_subject or f"מסמך חתום: {pdf_filename}",
+                    filename=attachment_filename,
+                    subject=effective_subject or f"מסמך חתום: {attachment_filename}",
                     body=email_body,
                     from_name=b_name,
                     reply_to=b_email,
@@ -385,7 +399,7 @@ async def sign_and_email(
             operation="sign-and-email",
             document_hash=signature_data["hash"],
             recipient=email,
-            filename=pdf_filename,
+            filename=attachment_filename,
             metadata=metadata,
         )
 
@@ -393,7 +407,7 @@ async def sign_and_email(
             "status": "signed_and_sent",
             "delivery": "email",
             "recipient": email,
-            "filename": pdf_filename,
+            "filename": attachment_filename,
             "s3_key": s3_filename,
             "download_url": download_url,
             "signature": {
