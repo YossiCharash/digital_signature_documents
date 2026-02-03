@@ -2,8 +2,11 @@
 name: CD (Render)
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
     branches: [main]
+    types:
+      - completed
   workflow_dispatch:
 
 jobs:
@@ -13,6 +16,9 @@ jobs:
   deploy:
     name: Deploy to Render
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success')
     steps:
       - name: Trigger Render deploy
         run: |
