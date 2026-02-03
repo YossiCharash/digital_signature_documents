@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import mimetypes
+import re
 import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
@@ -82,6 +83,16 @@ class EmailService:
         ct, _ = mimetypes.guess_type(filename)
         return ct or "application/octet-stream"
 
+    def _ascii_fallback_filename(self, filename: str) -> str:
+        """Return ASCII-only fallback filename for email clients."""
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename).strip()
+        base, ext = safe.rsplit(".", 1) if "." in safe else (safe, "")
+        if not base:
+            return "document.pdf"
+        if not ext:
+            return f"{base}.pdf"
+        return safe
+
     async def _send_document_via_smtp(
         self,
         to_email: str,
@@ -131,10 +142,21 @@ class EmailService:
         if document and filename:
             main_type, sub_type = self._content_type_for(filename).split("/", 1)
             attachment = MIMEApplication(document, _subtype=sub_type)
+            ascii_filename = self._ascii_fallback_filename(filename)
             attachment.add_header(
                 "Content-Disposition",
-                f'attachment; filename="{filename}"',
+                "attachment",
+                filename=ascii_filename,
             )
+            # Add RFC2231-encoded UTF-8 filename for non-ASCII names
+            if filename != ascii_filename:
+                attachment.set_param(
+                    "filename",
+                    filename,
+                    header="Content-Disposition",
+                    charset="utf-8",
+                    language="",
+                )
             msg.attach(attachment)
 
         loop = asyncio.get_event_loop()

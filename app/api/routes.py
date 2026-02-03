@@ -18,22 +18,34 @@ router = APIRouter(tags=["documents"])
 
 
 def _pdf_attachment_filename(original_filename: str) -> str:
-    """Normalize filename so PDF attachment has extension .PDF (for email and S3)."""
+    """Normalize filename so PDF attachment has extension .pdf (for email and S3)."""
     base, _ = (
         original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, "")
     )
-    return f"{base}.PDF" if base else "document.PDF"
+    return f"{base}.pdf" if base else "document.pdf"
 
 
 def _email_attachment_filename(business_name: str | None, original_filename: str) -> str:
-    """Use business name as attachment filename with .PDF when provided, else normalized file name."""
+    """Use business name as attachment filename with .pdf when provided, else normalized file name."""
     if business_name:
         # Keep letters (incl. Hebrew), digits, spaces, dots, hyphens; replace path/shell-unsafe chars
         safe = re.sub(r'[\\/:*?"<>|]', "_", business_name.strip()).strip()
         if safe:
             base = safe.rsplit(".", 1)[0] if "." in safe else safe
-            return f"{base}.PDF" if base else "document.PDF"
+            return f"{base}.pdf" if base else "document.pdf"
     return _pdf_attachment_filename(original_filename)
+
+
+def _attachment_name_source(business_name: str | None, body: str | None) -> str | None:
+    """Get business name from explicit field or first non-empty body line."""
+    if business_name and business_name.strip():
+        return business_name.strip()
+    if body and body.strip():
+        for line in body.splitlines():
+            candidate = line.strip()
+            if candidate:
+                return candidate
+    return None
 
 
 _email_deliverer = EmailDocumentDeliverer()
@@ -118,8 +130,9 @@ async def send_document_email(
         else:
             email_body = body or 'שלום רב!\n\nהקבלה מצו"ב למייל\n\nתודה'
 
-    # Use business name as attachment filename (with .PDF) when provided, else from file
-    pdf_filename = _email_attachment_filename(business_name_text, file.filename)
+    # Use business name from field or body as attachment filename (with .PDF) when provided
+    attachment_name_source = _attachment_name_source(business_name, body)
+    pdf_filename = _email_attachment_filename(attachment_name_source, file.filename)
 
     # Send email to client - use business_name as from_name
     logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
@@ -316,8 +329,9 @@ async def sign_and_email(
         b_name = sanitize_param(business_name)
         b_email = sanitize_param(business_email)
 
-        # Email attachment filename: business name with .PDF when provided
-        attachment_filename = _email_attachment_filename(b_name, file.filename)
+        # Email attachment filename: business name from field or body with .PDF when provided
+        attachment_name_source = _attachment_name_source(b_name, body)
+        attachment_filename = _email_attachment_filename(attachment_name_source, file.filename)
 
         # Prepare email body with business name - always include business name if provided
         business_name_text = b_name or ""
