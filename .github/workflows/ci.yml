@@ -1,10 +1,11 @@
-name: CI
+name: CI / CD
 
 on:
   push:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
 
 jobs:
   # ============================================
@@ -145,3 +146,39 @@ jobs:
       - name: Fail if lint or build failed
         if: needs.lint.result == 'failure' || needs.build-check.result == 'failure'
         run: exit 1
+
+  # ============================================
+  # Deploy to Render (רק אחרי ש-CI עבר, ורק ב-main)
+  # ============================================
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    needs: [lint, test, build-check, security]
+    if: (github.ref == 'refs/heads/main' && github.event_name == 'push') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Trigger Render deploy
+        run: |
+          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK_URL לא מוגדר. הוסף ב-Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          echo "Triggering Render deploy..."
+          resp=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}")
+          http_code=$(echo "$resp" | tail -n1)
+          body=$(echo "$resp" | sed '$d')
+          echo "Response ($http_code): $body"
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Render deploy hook returned HTTP $http_code"
+            exit 1
+          fi
+          echo "Render deploy triggered successfully."
+
+      - name: Deployment summary
+        run: |
+          echo "## 🚀 Deploy (Render)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy | ✅ Triggered |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Render will build and deploy from \`main\`. Check the [Render Dashboard](https://dashboard.render.com) for build status." >> $GITHUB_STEP_SUMMARY
