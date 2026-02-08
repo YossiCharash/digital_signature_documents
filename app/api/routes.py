@@ -17,8 +17,22 @@ from app.utils.validators import validate_email, validate_phone_number
 router = APIRouter(tags=["documents"])
 
 
+# Generic names that should not be used as attachment filename (e.g. from browser "noname")
+_GENERIC_FILENAMES = frozenset({"noname", "undefined", "unknown", "untitled", "document", ""})
+
+
+def _is_generic_filename(name: str | None) -> bool:
+    """True if name is missing or a generic placeholder (e.g. noname, undefined)."""
+    if not name or not name.strip():
+        return True
+    base = name.strip().rsplit(".", 1)[0] if "." in name else name.strip()
+    return base.lower() in _GENERIC_FILENAMES
+
+
 def _pdf_attachment_filename(original_filename: str) -> str:
     """Normalize filename so PDF attachment has extension .pdf (for email and S3)."""
+    if _is_generic_filename(original_filename):
+        return "document.pdf"
     base, _ = (
         original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, "")
     )
@@ -26,7 +40,9 @@ def _pdf_attachment_filename(original_filename: str) -> str:
 
 
 def _email_attachment_filename(business_name: str | None, original_filename: str) -> str:
-    """Use business name as attachment filename with .pdf when provided, else normalized file name."""
+    """Use business name as attachment filename with .pdf when provided, else normalized file name.
+    Ensures the attachment is never 'noname.pdf' – uses business name (e.g. יוסי פתרונות תוכנה.pdf)
+    or document.pdf when no business name and file has a generic name."""
     if business_name:
         # Keep letters (incl. Hebrew), digits, spaces, dots, hyphens; replace path/shell-unsafe chars
         safe = re.sub(r'[\\/:*?"<>|]', "_", business_name.strip()).strip()

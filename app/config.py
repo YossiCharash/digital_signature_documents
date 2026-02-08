@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     private_key_pem: str | None = None
     private_key_path: str | None = None
 
+    # Signer identity (used in certificate Subject + PDF signature metadata)
+    signer_name: str = "הכנס שם"
+    signer_email: str = "user@example.com"
+    signer_company: str = "My Company"
+
+    # PDF signature metadata (Reason/Location as shown in PDF viewers)
+    signature_reason: str = "Document authentication and integrity verification"
+    signature_location: str = "Digital Signature Service"
+    signature_contact: str | None = None
+
     # TSA (Trusted Timestamping Authority) - optional but recommended
     # Free TSA services: http://timestamp.digicert.com, http://timestamp.sectigo.com
     tsa_url: str | None = None  # TSA server URL (RFC 3161)
