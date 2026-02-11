@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import html
 import mimetypes
 import re
 import smtplib
@@ -83,6 +84,19 @@ class EmailService:
         ct, _ = mimetypes.guess_type(filename)
         return ct or "application/octet-stream"
 
+    @staticmethod
+    def _body_as_rtl_html(body: str) -> str:
+        """Wrap plain body in HTML with dir=rtl and lang=he for RTL display in email clients."""
+        escaped = html.escape(body)
+        # Preserve line breaks for display
+        with_br = escaped.replace("\n", "<br>\n")
+        return (
+            '<!DOCTYPE html>\n<html dir="rtl" lang="he">\n<head>\n'
+            '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width">\n'
+            "</head>\n<body style=\"font-family: Arial, sans-serif;\">\n"
+            f"<div dir=\"rtl\">{with_br}</div>\n</body>\n</html>"
+        )
+
     def _ascii_fallback_filename(self, filename: str) -> str:
         """Return ASCII-only fallback filename for email clients."""
         # Replace non-ASCII characters with underscore
@@ -146,7 +160,11 @@ class EmailService:
             msg["Reply-To"] = reply_to.strip()
 
         email_body = body or f"Please find attached: {filename}."
-        msg.attach(MIMEText(email_body, "plain"))
+        # Use multipart/alternative so clients that support HTML show RTL (right-to-left)
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText(email_body, "plain", "utf-8"))
+        alt.attach(MIMEText(self._body_as_rtl_html(email_body), "html", "utf-8"))
+        msg.attach(alt)
 
         if document:
             effective_filename = filename or "document.pdf"
@@ -234,12 +252,14 @@ class EmailService:
         if not self.api_key:
             raise EmailDeliveryError("Email API key not configured")
 
+        plain_body = (
+            body or f"Please find attached: {filename}." if filename else body or "Document"
+        )
         payload: dict[str, Any] = {
             "to": to_email,
             "subject": subject or f"Document: {filename}" if filename else subject or "Document",
-            "body": (
-                body or f"Please find attached: {filename}." if filename else body or "Document"
-            ),
+            "body": plain_body,
+            "html": self._body_as_rtl_html(plain_body),
             "attachments": [],
         }
         # Optional metadata some email APIs support (safe to include if ignored)

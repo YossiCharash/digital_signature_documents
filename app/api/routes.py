@@ -169,9 +169,9 @@ async def send_document_email(
             detail=f"Email delivery failed: {str(e)}",
         ) from e
 
-    # Also send to business email (if provided)
+    # Also send to business email (if provided and different from client email)
     business_email_trimmed = (business_email or "").strip() if business_email else None
-    if business_email_trimmed:
+    if business_email_trimmed and business_email_trimmed.lower() != (email or "").strip().lower():
         if not validate_email(business_email_trimmed):
             logger.error(f"Invalid business email address: {business_email_trimmed}")
             raise HTTPException(
@@ -198,6 +198,8 @@ async def send_document_email(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Email delivery failed (business copy): {str(e)}",
             ) from e
+    elif business_email_trimmed and business_email_trimmed.lower() == (email or "").strip().lower():
+        logger.info(f"business_email same as recipient ({email}), skipping duplicate send")
     else:
         logger.warning("business_email not provided or empty, skipping business email copy")
 
@@ -385,8 +387,8 @@ async def sign_and_email(
         )
         logger.info(f"Successfully sent email to client: {email}")
 
-        # Send email to business if business_email is provided
-        if b_email:
+        # Send email to business if business_email is provided and different from client
+        if b_email and (email or "").strip().lower() != b_email.strip().lower():
             if not validate_email(b_email):
                 logger.error(f"Invalid business email address: {b_email}")
                 raise HTTPException(
@@ -411,6 +413,8 @@ async def sign_and_email(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to send copy to business email: {str(e)}",
                 ) from e
+        elif b_email and (email or "").strip().lower() == b_email.strip().lower():
+            logger.info(f"business_email same as recipient ({email}), skipping duplicate send")
         else:
             logger.warning(
                 "business_email not provided or empty (after sanitize), skipping business email copy"
