@@ -93,8 +93,8 @@ class EmailService:
         return (
             '<!DOCTYPE html>\n<html dir="rtl" lang="he">\n<head>\n'
             '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width">\n'
-            "</head>\n<body style=\"font-family: Arial, sans-serif;\">\n"
-            f"<div dir=\"rtl\">{with_br}</div>\n</body>\n</html>"
+            '</head>\n<body style="font-family: Arial, sans-serif;">\n'
+            f'<div dir="rtl">{with_br}</div>\n</body>\n</html>'
         )
 
     def _ascii_fallback_filename(self, filename: str) -> str:
