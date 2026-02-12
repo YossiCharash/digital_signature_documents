@@ -27,17 +27,17 @@ class EmailService:
     """Service for sending emails with document attachments (single responsibility)."""
 
     def __init__(
-        self,
-        provider: str | None = None,
-        smtp_host: str | None = None,
-        smtp_port: int | None = None,
-        smtp_user: str | None = None,
-        smtp_password: str | None = None,
-        smtp_use_tls: bool | None = None,
-        smtp_from_email: str | None = None,
-        smtp_from_name: str | None = None,
-        api_url: str | None = None,
-        api_key: str | None = None,
+            self,
+            provider: str | None = None,
+            smtp_host: str | None = None,
+            smtp_port: int | None = None,
+            smtp_user: str | None = None,
+            smtp_password: str | None = None,
+            smtp_use_tls: bool | None = None,
+            smtp_from_email: str | None = None,
+            smtp_from_name: str | None = None,
+            api_url: str | None = None,
+            api_key: str | None = None,
     ):
         self.provider = provider or settings.email_provider
         self.smtp_host = smtp_host or settings.smtp_host
@@ -51,31 +51,24 @@ class EmailService:
         self.api_key = api_key or settings.email_api_key
 
     async def send_document(
-        self,
-        to_email: str,
-        document: bytes,
-        filename: str,
-        subject: str | None = None,
-        body: str | None = None,
-        from_name: str | None = None,
-        reply_to: str | None = None,
+            self,
+            to_email: str,
+            document: bytes,
+            filename: str,
+            subject: str | None = None,
+            body: str | None = None,
+            from_name: str | None = None,
+            reply_to: str | None = None,
     ) -> bool:
         """Send document as email attachment."""
         try:
             logger.info(f"Sending document {filename} to {to_email}")
 
-            if self.provider == "smtp":
-                return await self._send_document_via_smtp(
-                    to_email, document, filename, subject, body, from_name, reply_to
-                )
-            if self.provider == "api":
-                return await self._send_document_via_api(
-                    to_email, document, filename, subject, body, from_name, reply_to
-                )
-            raise EmailDeliveryError(f"Unknown email provider: {self.provider}")
-
+            return await self._send_document_via_smtp(
+                to_email, document, filename, subject, body, from_name, reply_to
+            )
         except EmailDeliveryError:
-            raise
+            raise EmailDeliveryError(f"Unknown email provider: {self.provider}")
         except Exception as e:
             logger.error(f"Email delivery failed: {e}")
             raise EmailDeliveryError(f"Email delivery failed: {e}") from e
@@ -117,14 +110,14 @@ class EmailService:
         return safe if ext else f"{safe}.pdf"
 
     async def _send_document_via_smtp(
-        self,
-        to_email: str,
-        document: bytes,
-        filename: str,
-        subject: str | None,
-        body: str | None,
-        from_name: str | None,
-        reply_to: str | None,
+            self,
+            to_email: str,
+            document: bytes,
+            filename: str,
+            subject: str | None,
+            body: str | None,
+            from_name: str | None,
+            reply_to: str | None,
     ) -> bool:
         # Validate SMTP host configuration
         if not self.smtp_host or not self.smtp_host.strip():
@@ -138,20 +131,15 @@ class EmailService:
             )
 
         msg = MIMEMultipart()
-        # Use from_name if provided (even if empty string), otherwise fall back to smtp_from_name
         if from_name is not None:
-            # from_name was explicitly provided (could be empty string)
             effective_from_name = from_name.strip() if from_name else ""
         else:
-            # from_name was not provided, use default
             effective_from_name = (self.smtp_from_name or "").strip()
 
         if effective_from_name:
-            # Use Header to ensure proper encoding of Hebrew characters in From name
             from email.header import Header
-
             from_name_encoded = str(Header(effective_from_name, "utf-8"))
-            msg["From"] = f"{from_name_encoded} <{self.smtp_from_email}>"
+            msg["From"] = f"{from_name_encoded} {self.smtp_from_email}"
         else:
             msg["From"] = f"{self.smtp_from_email}"
         msg["To"] = to_email
@@ -160,7 +148,6 @@ class EmailService:
             msg["Reply-To"] = reply_to.strip()
 
         email_body = body or f"Please find attached: {filename}."
-        # Use multipart/alternative so clients that support HTML show RTL (right-to-left)
         alt = MIMEMultipart("alternative")
         alt.attach(MIMEText(email_body, "plain", "utf-8"))
         alt.attach(MIMEText(self._body_as_rtl_html(email_body), "html", "utf-8"))
@@ -181,7 +168,6 @@ class EmailService:
                 f"{main_type}/{sub_type}",
                 name=ascii_filename,
             )
-            # Add RFC2231-encoded UTF-8 filename for non-ASCII names
             if effective_filename != ascii_filename:
                 attachment.set_param(
                     "filename",
@@ -219,7 +205,6 @@ class EmailService:
             server.send_message(msg)
             server.quit()
         except OSError as e:
-            # Handle DNS resolution errors and connection errors
             error_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
             if error_code == 11001 or (hasattr(e, "errno") and e.errno in (11001, -2, -3)):
                 raise EmailDeliveryError(
@@ -236,54 +221,3 @@ class EmailService:
             ) from e
         except smtplib.SMTPException as e:
             raise EmailDeliveryError(f"SMTP error: {e}") from e
-
-    async def _send_document_via_api(
-        self,
-        to_email: str,
-        document: bytes,
-        filename: str,
-        subject: str | None,
-        body: str | None,
-        from_name: str | None,
-        reply_to: str | None,
-    ) -> bool:
-        if not self.api_url:
-            raise EmailDeliveryError("Email API URL not configured")
-        if not self.api_key:
-            raise EmailDeliveryError("Email API key not configured")
-
-        plain_body = (
-            body or f"Please find attached: {filename}." if filename else body or "Document"
-        )
-        payload: dict[str, Any] = {
-            "to": to_email,
-            "subject": subject or f"Document: {filename}" if filename else subject or "Document",
-            "body": plain_body,
-            "html": self._body_as_rtl_html(plain_body),
-            "attachments": [],
-        }
-        # Optional metadata some email APIs support (safe to include if ignored)
-        if from_name and from_name.strip():
-            payload["from_name"] = from_name.strip()
-        if reply_to and reply_to.strip():
-            payload["reply_to"] = reply_to.strip()
-        if document and filename:
-            ct = self._content_type_for(filename)
-            payload["attachments"] = [
-                {
-                    "filename": filename,
-                    "content": base64.b64encode(document).decode("ascii"),
-                    "content_type": ct,
-                }
-            ]
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        async with httpx.AsyncClient() as client:
-            response = await client.post(self.api_url, json=payload, headers=headers, timeout=30.0)
-            response.raise_for_status()
-
-        logger.info(f"Document {filename} sent via API to {to_email}")
-        return True

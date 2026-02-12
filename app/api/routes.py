@@ -21,22 +21,10 @@ router = APIRouter(tags=["documents"])
 _GENERIC_FILENAMES = frozenset({"noname", "undefined", "unknown", "untitled", "document", ""})
 
 
-def _is_generic_filename(name: str | None) -> bool:
-    """True if name is missing or a generic placeholder (e.g. noname, undefined)."""
-    if not name or not name.strip():
-        return True
-    base = name.strip().rsplit(".", 1)[0] if "." in name else name.strip()
-    return base.lower() in _GENERIC_FILENAMES
 
 
 def _pdf_attachment_filename(original_filename: str) -> str:
-    """Normalize filename so PDF attachment has extension .pdf (for email and S3)."""
-    if _is_generic_filename(original_filename):
-        return "document.pdf"
-    base, _ = (
-        original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, "")
-    )
-    return f"{base}.pdf" if base else "document.pdf"
+    return f"{original_filename}.pdf"
 
 
 def _email_attachment_filename(business_name: str | None, original_filename: str) -> str:
@@ -84,8 +72,7 @@ def _get_signing_service() -> SigningService:
 async def send_document_email(
     file: UploadFile = File(..., description="Document file to send"),
     email: str = Form(..., description="Recipient email"),
-    subject: str | None = Form(None, description="Email subject"),
-    so: str | None = Form(None, description="(legacy) Email subject"),
+    subject: str | None = Form(None, alias="so",description="Email subject"),
     body: str | None = Form(None, description="Email body"),
     business_name: str | None = Form(None, description="Business name to show as sender name"),
     business_email: str | None = Form(None, description="Business email to also send document to"),
@@ -122,8 +109,6 @@ async def send_document_email(
             detail="Uploaded file is empty",
         )
 
-    effective_subject = subject or so
-
     # Prepare email body with business name - always include business name if provided
     business_name_text = (business_name or "").strip()
 
@@ -133,14 +118,11 @@ async def send_document_email(
     )
 
     if body and body.strip():
-        # If body is provided, check if business name is already in it
-        # If not, prepend it to make it clear who sent it
         if business_name_text and business_name_text not in body:
             email_body = f'שלום רב!\n\nהקבלה מ{business_name_text} מצו"ב למייל\n\n{body}'
         else:
             email_body = body
     else:
-        # Create default body with business name
         if business_name_text:
             email_body = f'שלום רב!\n\nהקבלה מ{business_name_text} מצו"ב למייל\n\nתודה'
         else:
@@ -157,7 +139,7 @@ async def send_document_email(
             to_email=email,
             document=content,
             filename=pdf_filename,
-            subject=effective_subject or f"Document: {pdf_filename}",
+            subject=subject or f"Document: {pdf_filename}",
             body=email_body,
             from_name=business_name,  # This will be the sender name in the email
             reply_to=business_email,
@@ -184,7 +166,7 @@ async def send_document_email(
                 to_email=business_email_trimmed,
                 document=content,
                 filename=pdf_filename,
-                subject=effective_subject or f"Document: {pdf_filename}",
+                subject=subject or f"Document: {pdf_filename}",
                 body=email_body,
                 from_name=business_name,
                 reply_to=business_email_trimmed,
