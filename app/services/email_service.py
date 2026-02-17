@@ -5,10 +5,10 @@ import html
 import mimetypes
 import re
 import smtplib
+from email import policy
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email import policy
 
 from app.config import settings
 from app.utils.logger import logger

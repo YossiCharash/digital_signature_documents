@@ -25,56 +25,56 @@ def find_small_stamp_position(
 ) -> dict:
     """
     Create a detailed grid overlay to find the small stamp position.
-    
+
     Args:
         reference_pdf_path: Path to PDF with stamps
         output_image_path: Path to save grid image
         page_number: Page to analyze (0-indexed)
         grid_spacing: Grid spacing in points (smaller = more precise)
-    
+
     Returns:
         Dictionary with suggested position and size
     """
     pdf_path = Path(reference_pdf_path)
-    
+
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {reference_pdf_path}")
-    
+
     # Open PDF
     pdf_doc = fitz.open(reference_pdf_path)
-    
+
     if page_number >= len(pdf_doc):
         raise ValueError(f"Page {page_number} not found. PDF has {len(pdf_doc)} pages.")
-    
+
     page = pdf_doc[page_number]
     page_rect = page.rect
-    
+
     # Render page as high-resolution image
     zoom = 3.0  # Higher zoom for better precision
     mat = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat)
-    
+
     # Convert to PIL Image
     img_data = pix.tobytes("png")
     page_img = Image.open(BytesIO(img_data))
-    
+
     # Create a copy for drawing grid
     grid_img = page_img.copy()
     draw = ImageDraw.Draw(grid_img)
-    
+
     # Calculate grid lines in image coordinates
     img_width, img_height = grid_img.size
     page_width_pts = page_rect.width
     page_height_pts = page_rect.height
-    
+
     # Scale factor: image pixels to PDF points
     scale_x = img_width / page_width_pts
     scale_y = img_height / page_height_pts
-    
+
     # Draw fine grid lines
     grid_color = (255, 0, 0, 100)  # Red with transparency
     text_color = (255, 0, 0, 255)  # Red
-    
+
     # Vertical lines (X coordinates) - every 10 points
     x = 0
     label_count = 0
@@ -85,12 +85,12 @@ def find_small_stamp_position(
         if label_count % 5 == 0:
             try:
                 font = ImageFont.truetype("arial.ttf", 12)
-            except:
+            except OSError:
                 font = ImageFont.load_default()
             draw.text((img_x + 2, 2), f"{x:.0f}", fill=text_color, font=font)
         x += grid_spacing
         label_count += 1
-    
+
     # Horizontal lines (Y coordinates from bottom) - every 10 points
     y = 0
     label_count = 0
@@ -102,12 +102,12 @@ def find_small_stamp_position(
         if label_count % 5 == 0:
             try:
                 font = ImageFont.truetype("arial.ttf", 12)
-            except:
+            except OSError:
                 font = ImageFont.load_default()
             draw.text((2, img_y + 2), f"{y:.0f}", fill=text_color, font=font)
         y += grid_spacing
         label_count += 1
-    
+
     # Highlight top-left area where small stamp typically is
     # Draw a yellow rectangle in the top-left quadrant as a guide
     highlight_color = (255, 255, 0, 50)  # Yellow with transparency
@@ -117,18 +117,18 @@ def find_small_stamp_position(
     img_x1 = int(top_left_rect.x1 * scale_x)
     img_y1 = int(img_height - (top_left_rect.y0 * scale_y))
     draw.rectangle([(img_x0, img_y0), (img_x1, img_y1)], fill=highlight_color, outline=(255, 255, 0, 255), width=2)
-    
+
     # Add corner markers
     corner_size = 15
     # Bottom-left corner (origin)
-    draw.rectangle([(0, img_height - corner_size), (corner_size, img_height)], 
+    draw.rectangle([(0, img_height - corner_size), (corner_size, img_height)],
                   fill=(0, 255, 0, 200), outline=(0, 255, 0, 255), width=2)
     try:
         font = ImageFont.truetype("arial.ttf", 10)
-    except:
+    except OSError:
         font = ImageFont.load_default()
     draw.text((2, img_height - 12), "0,0", fill=(0, 255, 0, 255), font=font)
-    
+
     # Add instructions
     instructions = [
         "מציאת מיקום החותמת הקטנה - Small Stamp Position Finder",
@@ -147,15 +147,15 @@ def find_small_stamp_position(
         "",
         f"Grid spacing: {grid_spacing} points",
     ]
-    
+
     y_pos = img_height - 280
     for i, line in enumerate(instructions):
         try:
             font = ImageFont.truetype("arial.ttf", 11)
-        except:
+        except OSError:
             font = ImageFont.load_default()
         draw.text((10, y_pos + i * 18), line, fill=(0, 0, 255, 255), font=font)
-    
+
     # Save image
     if output_image_path:
         grid_img.save(output_image_path)
@@ -164,9 +164,9 @@ def find_small_stamp_position(
         output_path = f"small_stamp_grid_page{page_number + 1}.png"
         grid_img.save(output_path)
         print(f"\nGrid overlay saved to: {output_path}")
-    
+
     pdf_doc.close()
-    
+
     # Suggest typical values for small stamp
     print(f"\n{'='*60}")
     print("Suggested configuration for small stamp:")
@@ -174,7 +174,7 @@ def find_small_stamp_position(
     print("Based on typical small stamp location (top-left area):")
     print("")
     print("Typical position range:")
-    print(f"  X: 20-100 points (from left edge)")
+    print("  X: 20-100 points (from left edge)")
     print(f"  Y: {page_height_pts - 150:.0f}-{page_height_pts - 50:.0f} points (from bottom)")
     print("")
     print("Typical size for small stamp:")
@@ -194,7 +194,7 @@ def find_small_stamp_position(
     print("4. Measure the stamp size")
     print("5. Update your .env file with these values")
     print(f"{'='*60}")
-    
+
     return {
         "page_width": page_width_pts,
         "page_height": page_height_pts,
@@ -211,11 +211,11 @@ def main():
         print("\nExample:")
         print("  python scripts/find_small_stamp_position.py reference.pdf 0 small_stamp_grid.png")
         sys.exit(1)
-    
+
     pdf_path = sys.argv[1]
     page_num = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     output_path = sys.argv[3] if len(sys.argv) > 3 else None
-    
+
     try:
         find_small_stamp_position(pdf_path, output_path, page_num)
     except Exception as e:
