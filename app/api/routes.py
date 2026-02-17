@@ -1,6 +1,5 @@
 """API routes: send document via email or SMS."""
 
-import re
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -15,14 +14,6 @@ from app.utils.logger import logger
 from app.utils.validators import validate_email, validate_phone_number
 
 router = APIRouter(tags=["documents"])
-
-
-
-
-def _pdf_attachment_filename(original_filename: str) -> str:
-    return f"{original_filename}.pdf"
-
-
 
 # Unicode RTL mark so plain-text email clients display Hebrew in correct order
 _RTL_MARK = "\u200f"
@@ -65,12 +56,12 @@ def _get_signing_service() -> SigningService:
 
 @router.post("/documents/send-email", status_code=status.HTTP_200_OK)
 async def send_document_email(
-    file: UploadFile = File(..., description="Document file to send"),
-    email: str = Form(..., description="Recipient email"),
-    subject: str | None = Form(None, alias="so", description="Email subject"),
-    body: str | None = Form(None, description="Email body"),
-    business_name: str | None = Form(None, description="Business name to show as sender name"),
-    business_email: str | None = Form(None, description="Business email to also send document to"),
+        file: UploadFile = File(..., description="Document file to send"),
+        email: str = Form(..., description="Recipient email"),
+        subject: str | None = Form(None, alias="so", description="Email subject"),
+        body: str | None = Form(None, description="Email body"),
+        business_name: str | None = Form(None, description="Business name to show as sender name"),
+        business_email: str | None = Form(None, description="Business email to also send document to"),
 ) -> dict:
     """Receive a document and send it via email as attachment."""
     if not file.filename:
@@ -121,8 +112,8 @@ async def send_document_email(
         else:
             email_body = _rtl_body(body or 'שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה')
 
-    attachment_name_source = _attachment_name_source(business_name, body)
-    pdf_filename = _pdf_attachment_filename(file.filename)
+    _attachment_name_source(business_name, body)
+    pdf_filename = f"{file.filename}.pdf"
 
     logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
     try:
@@ -187,9 +178,9 @@ async def send_document_email(
 
 @router.post("/documents/send-sms", status_code=status.HTTP_200_OK)
 async def send_document_sms(
-    file: UploadFile = File(..., description="Document file to send"),
-    phone: str = Form(..., description="Recipient phone number"),
-    message: str | None = Form(None, description="Optional SMS message"),
+        file: UploadFile = File(..., description="Document file to send"),
+        phone: str = Form(..., description="Recipient phone number"),
+        message: str | None = Form(None, description="Optional SMS message"),
 ) -> dict:
     """Receive a document, upload to S3, and send SMS with download link."""
     if not file.filename:
@@ -247,14 +238,14 @@ async def send_document_sms(
 
 @router.post("/documents/sign-and-email", status_code=status.HTTP_200_OK)
 async def sign_and_email(
-    file: UploadFile = File(..., description="PDF document to sign and send"),
-    email: str = Form(..., description="Recipient email"),
-    subject: str | None = Form(None, description="Email subject"),
-    so: str | None = Form(None, description="(legacy) Email subject"),
-    body: str | None = Form(None, description="Email body"),
-    client_name: str | None = Form(None, description="Client name for email body"),
-    business_name: str | None = Form(None, description="Business name to include in email"),
-    business_email: str | None = Form(None, description="Business email to also send document to"),
+        file: UploadFile = File(..., description="PDF document to sign and send"),
+        email: str = Form(..., description="Recipient email"),
+        subject: str | None = Form(None, description="Email subject"),
+        so: str | None = Form(None, description="(legacy) Email subject"),
+        body: str | None = Form(None, description="Email body"),
+        client_name: str | None = Form(None, description="Client name for email body"),
+        business_name: str | None = Form(None, description="Business name to include in email"),
+        business_email: str | None = Form(None, description="Business email to also send document to"),
 ) -> dict:
     """Sign PDF, upload to S3, and send email with download link."""
     if not file.filename:
@@ -287,7 +278,7 @@ async def sign_and_email(
         signing_svc = _get_signing_service()
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
-        s3_filename = _pdf_attachment_filename(file.filename)
+        s3_filename = f"{file.filename}.pdf"
 
         metadata = {
             "document-hash": signature_data["hash"],
@@ -315,8 +306,8 @@ async def sign_and_email(
         b_name = sanitize_param(business_name)
         b_email = sanitize_param(business_email)
 
-        attachment_name_source = _attachment_name_source(b_name, body)
-        attachment_filename = _pdf_attachment_filename(file.filename)
+        _attachment_name_source(b_name, body)
+        attachment_filename = f"{file.filename}.pdf"
 
         business_name_text = b_name or ""
         client_name_text = (client_name or "").strip()
@@ -445,9 +436,9 @@ async def sign_and_email(
 
 @router.post("/documents/sign-and-sms", status_code=status.HTTP_200_OK)
 async def sign_and_sms(
-    file: UploadFile = File(..., description="PDF document to sign and send"),
-    phone: str = Form(..., description="Recipient phone number"),
-    message: str | None = Form(None, description="Optional SMS message"),
+        file: UploadFile = File(..., description="PDF document to sign and send"),
+        phone: str = Form(..., description="Recipient phone number"),
+        message: str | None = Form(None, description="Optional SMS message"),
 ) -> dict:
     """Sign PDF, upload to S3, and send SMS with download link."""
     if not file.filename:
@@ -482,7 +473,7 @@ async def sign_and_sms(
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
         # Use normalized filename with .PDF extension for S3
-        pdf_filename = _pdf_attachment_filename(file.filename)
+        pdf_filename = f"{file.filename}.pdf"
         s3_filename = pdf_filename
 
         # Upload signed PDF to S3 with metadata
@@ -550,7 +541,7 @@ async def sign_and_sms(
 
 @router.post("/documents/verify-signature", status_code=status.HTTP_200_OK)
 async def verify_document_signature(
-    file: UploadFile = File(..., description="PDF document to verify"),
+        file: UploadFile = File(..., description="PDF document to verify"),
 ) -> dict:
     """Verify digital signature of a PDF document."""
     if not file.filename:
