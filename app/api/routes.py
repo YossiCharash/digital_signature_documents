@@ -225,6 +225,7 @@ async def sign_and_email(
     effective_subject = subject or so
     attachment_filename = _email_attachment_filename(b_name, file.filename)
     email_body = _build_email_body(b_name, client_name=client_name, body=body)
+    logger.info(f"attachment_filename will be: {_email_attachment_filename(b_name, file.filename)}")
 
     logger.info(
         f"sign-and-email | to={email} business_name='{b_name}' "
