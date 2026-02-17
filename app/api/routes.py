@@ -21,8 +21,6 @@ router = APIRouter(tags=["documents"])
 _GENERIC_FILENAMES = frozenset({"noname", "undefined", "unknown", "untitled", "document", ""})
 
 
-
-
 def _pdf_attachment_filename(original_filename: str) -> str:
     return f"{original_filename}.pdf"
 
@@ -41,7 +39,7 @@ def _email_attachment_filename(business_name: str | None, original_filename: str
 
 
 # Unicode RTL mark so plain-text email clients display Hebrew in correct order
-_RTL_MARK = "\u200F"
+_RTL_MARK = "\u200f"
 
 
 def _rtl_body(text: str) -> str:
@@ -83,7 +81,7 @@ def _get_signing_service() -> SigningService:
 async def send_document_email(
     file: UploadFile = File(..., description="Document file to send"),
     email: str = Form(..., description="Recipient email"),
-    subject: str | None = Form(None, alias="so",description="Email subject"),
+    subject: str | None = Form(None, alias="so", description="Email subject"),
     body: str | None = Form(None, description="Email body"),
     business_name: str | None = Form(None, description="Business name to show as sender name"),
     business_email: str | None = Form(None, description="Business email to also send document to"),
@@ -343,12 +341,16 @@ async def sign_and_email(
 
         if body and body.strip() and str(body).lower() != "none":
             if business_name_text and business_name_text not in body:
-                email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\n{body}')
+                email_body = _rtl_body(
+                    f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\n{body}'
+                )
             else:
                 email_body = _rtl_body(body)
         else:
             if business_name_text:
-                email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\nתודה')
+                email_body = _rtl_body(
+                    f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\nתודה'
+                )
             elif client_name_text:
                 email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{client_name_text} מצו"ב למייל\n\nתודה')
             else:

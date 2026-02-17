@@ -27,17 +27,17 @@ class EmailService:
     """Service for sending emails with document attachments (single responsibility)."""
 
     def __init__(
-            self,
-            provider: str | None = None,
-            smtp_host: str | None = None,
-            smtp_port: int | None = None,
-            smtp_user: str | None = None,
-            smtp_password: str | None = None,
-            smtp_use_tls: bool | None = None,
-            smtp_from_email: str | None = None,
-            smtp_from_name: str | None = None,
-            api_url: str | None = None,
-            api_key: str | None = None,
+        self,
+        provider: str | None = None,
+        smtp_host: str | None = None,
+        smtp_port: int | None = None,
+        smtp_user: str | None = None,
+        smtp_password: str | None = None,
+        smtp_use_tls: bool | None = None,
+        smtp_from_email: str | None = None,
+        smtp_from_name: str | None = None,
+        api_url: str | None = None,
+        api_key: str | None = None,
     ):
         self.provider = provider or settings.email_provider
         self.smtp_host = smtp_host or settings.smtp_host
@@ -51,14 +51,14 @@ class EmailService:
         self.api_key = api_key or settings.email_api_key
 
     async def send_document(
-            self,
-            to_email: str,
-            document: bytes,
-            filename: str,
-            subject: str | None = None,
-            body: str | None = None,
-            from_name: str | None = None,
-            reply_to: str | None = None,
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None = None,
+        body: str | None = None,
+        from_name: str | None = None,
+        reply_to: str | None = None,
     ) -> bool:
         """Send document as email attachment."""
         try:
@@ -110,14 +110,14 @@ class EmailService:
         return safe if ext else f"{safe}.pdf"
 
     async def _send_document_via_smtp(
-            self,
-            to_email: str,
-            document: bytes,
-            filename: str,
-            subject: str | None,
-            body: str | None,
-            from_name: str | None,
-            reply_to: str | None,
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
     ) -> bool:
         # Validate SMTP host configuration
         if not self.smtp_host or not self.smtp_host.strip():
@@ -138,6 +138,7 @@ class EmailService:
 
         if effective_from_name:
             from email.header import Header
+
             from_name_encoded = str(Header(effective_from_name, "utf-8"))
             msg["From"] = f"{from_name_encoded} {self.smtp_from_email}"
         else:

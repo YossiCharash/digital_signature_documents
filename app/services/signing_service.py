@@ -1,4 +1,3 @@
-
 import base64
 import hashlib
 from datetime import datetime, timedelta
@@ -207,9 +206,7 @@ class SigningService:
             img = Image.open(signature_path)
             img_width, img_height = img.size
 
-            signature_width = settings.signature_width or (
-                img_width * 72 / 96
-            )
+            signature_width = settings.signature_width or (img_width * 72 / 96)
             signature_height = settings.signature_height or (img_height * 72 / 96)
 
             if settings.signature_page == -1:
@@ -300,7 +297,6 @@ class SigningService:
                 "signingdate": datetime.utcnow().strftime("D:%Y%m%d%H%M%S+00'00'"),
                 "signature": "Digitally Signed Document",
             }
-
 
             signature_data_bytes = None
             tsa_success = False
