@@ -40,6 +40,17 @@ def _email_attachment_filename(business_name: str | None, original_filename: str
     return _pdf_attachment_filename(original_filename)
 
 
+# Unicode RTL mark so plain-text email clients display Hebrew in correct order
+_RTL_MARK = "\u200F"
+
+
+def _rtl_body(text: str) -> str:
+    """Prefix with RTL mark so Hebrew text displays in correct order (plain text and HTML)."""
+    if not text:
+        return text
+    return _RTL_MARK + text
+
+
 def _attachment_name_source(business_name: str | None, body: str | None) -> str | None:
     """Get business name from explicit field or first non-empty body line."""
     if business_name and business_name.strip():
@@ -109,30 +120,26 @@ async def send_document_email(
             detail="Uploaded file is empty",
         )
 
-    # Prepare email body with business name - always include business name if provided
     business_name_text = (business_name or "").strip()
 
-    # Log received parameters for debugging
     logger.info(
         f"send-email: business_name='{business_name}', business_email='{business_email}', email='{email}'"
     )
 
     if body and body.strip():
         if business_name_text and business_name_text not in body:
-            email_body = f'שלום רב!\n\nהקבלה מ{business_name_text} מצו"ב למייל\n\n{body}'
+            email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\n{body}')
         else:
-            email_body = body
+            email_body = _rtl_body(body)
     else:
         if business_name_text:
-            email_body = f'שלום רב!\n\nהקבלה מ{business_name_text} מצו"ב למייל\n\nתודה'
+            email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\nתודה')
         else:
-            email_body = body or 'שלום רב!\n\nהקבלה מצו"ב למייל\n\nתודה'
+            email_body = _rtl_body(body or 'שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה')
 
-    # Use business name from field or body as attachment filename (with .PDF) when provided
     attachment_name_source = _attachment_name_source(business_name, body)
     pdf_filename = _email_attachment_filename(attachment_name_source, file.filename)
 
-    # Send email to client - use business_name as from_name
     logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
     try:
         await _email_service.send_document(
@@ -294,13 +301,10 @@ async def sign_and_email(
 
     try:
         signing_svc = _get_signing_service()
-        # Sign PDF and get signed PDF bytes with embedded signature
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
-        # S3 key: normalized from file name (stable for storage/URLs)
         s3_filename = _pdf_attachment_filename(file.filename)
 
-        # Upload signed PDF to S3 with metadata
         metadata = {
             "document-hash": signature_data["hash"],
             "document-signature": signature_data["signature"],
@@ -309,18 +313,16 @@ async def sign_and_email(
             "signed-at": datetime.utcnow().isoformat(),
         }
         _storage_service.upload_file(
-            content=signed_content,  # Upload signed PDF, not original
+            content=signed_content,
             filename=s3_filename,
             content_type="application/pdf",
             metadata=metadata,
         )
 
-        # Generate pre-signed URL (for API response, not included in email)
         download_url = _storage_service.generate_presigned_url(s3_filename)
 
         effective_subject = subject or so
 
-        # FIX: Handle cases where parameters might come as string 'None' or are missing
         def sanitize_param(val):
             if val is None or str(val).lower() == "none" or str(val).strip() == "":
                 return None
@@ -329,34 +331,29 @@ async def sign_and_email(
         b_name = sanitize_param(business_name)
         b_email = sanitize_param(business_email)
 
-        # Email attachment filename: business name from field or body with .PDF when provided
         attachment_name_source = _attachment_name_source(b_name, body)
         attachment_filename = _email_attachment_filename(attachment_name_source, file.filename)
 
-        # Prepare email body with business name - always include business name if provided
         business_name_text = b_name or ""
         client_name_text = (client_name or "").strip()
 
-        # Log received parameters for debugging
         logger.info(
             f"sign-and-email: business_name='{b_name}', business_email='{b_email}', email='{email}', so='{so}'"
         )
 
         if body and body.strip() and str(body).lower() != "none":
-            # If body is provided, check if business name is already in it
             if business_name_text and business_name_text not in body:
-                email_body = f'שלום רב!\n\nהקבלה מ{business_name_text} מצו"ב למייל\n\n{body}'
+                email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\n{body}')
             else:
-                email_body = body
+                email_body = _rtl_body(body)
         else:
             if business_name_text:
-                email_body = f'שלום רב!\n\nהקבלה מ{business_name_text} מצו"ב למייל\n\nתודה'
+                email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{business_name_text} מצו"ב למייל\n\nתודה')
             elif client_name_text:
-                email_body = f'שלום רב!\n\nהקבלה מ{client_name_text} מצו"ב למייל\n\nתודה'
+                email_body = _rtl_body(f'שלום רב!\n\nהמסמך מ{client_name_text} מצו"ב למייל\n\nתודה')
             else:
-                email_body = 'שלום רב!\n\nהקבלה מצו"ב למייל\n\nתודה'
+                email_body = _rtl_body('שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה')
 
-        # Send email to client - use business_name as from_name
         logger.info(f"Sending email to client: {email}, from_name: '{b_name}'")
         await _email_service.send_document(
             to_email=email,
@@ -369,7 +366,6 @@ async def sign_and_email(
         )
         logger.info(f"Successfully sent email to client: {email}")
 
-        # Send email to business if business_email is provided and different from client
         if b_email and (email or "").strip().lower() != b_email.strip().lower():
             if not validate_email(b_email):
                 logger.error(f"Invalid business email address: {b_email}")
@@ -402,7 +398,6 @@ async def sign_and_email(
                 "business_email not provided or empty (after sanitize), skipping business email copy"
             )
 
-        # Audit log
         metadata = {
             "s3_key": s3_filename,
             "signature": signature_data["signature"],
