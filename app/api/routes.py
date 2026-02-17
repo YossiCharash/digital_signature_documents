@@ -23,30 +23,6 @@ def _pdf_attachment_filename(original_filename: str) -> str:
     return f"{original_filename}.pdf"
 
 
-def _email_attachment_filename(business_name: str | None, original_filename: str) -> str:
-    """Use business name as attachment filename with .pdf when provided, else normalized file name.
-    Ensures the attachment is never 'noname.pdf' – uses business name (e.g. יוסי פתרונות תוכנה.pdf)
-    or document.pdf when no business name and file has a generic name."""
-    if business_name:
-        # Keep letters (incl. Hebrew), digits, spaces, dots, hyphens; replace path/shell-unsafe chars
-        safe = re.sub(r'[\\/:*?"<>|]', "_", business_name.strip()).strip()
-        if safe:
-            base = safe.rsplit(".", 1)[0] if "." in safe else safe
-            return f"{base}.pdf" if base else "document.pdf"
-    result = _pdf_attachment_filename(original_filename or "")
-    # When deployed (e.g. Render), client may send file without filename → "noname"; never send that
-    if not (original_filename or "").strip() or (original_filename or "").strip().lower() in ("noname", "unnamed"):
-        logger.debug(
-            "Attachment filename fallback to document.pdf (no business_name and file filename is empty or noname)"
-        )
-        return "document.pdf"
-    if result.lower() == "noname.pdf":
-        logger.debug(
-            "Attachment filename fallback to document.pdf (no business_name and file filename is noname)"
-        )
-        return "document.pdf"
-    return result
-
 
 # Unicode RTL mark so plain-text email clients display Hebrew in correct order
 _RTL_MARK = "\u200f"
@@ -146,7 +122,7 @@ async def send_document_email(
             email_body = _rtl_body(body or 'שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה')
 
     attachment_name_source = _attachment_name_source(business_name, body)
-    pdf_filename = _email_attachment_filename(attachment_name_source, file.filename)
+    pdf_filename = _pdf_attachment_filename(file.filename)
 
     logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
     try:
@@ -340,7 +316,7 @@ async def sign_and_email(
         b_email = sanitize_param(business_email)
 
         attachment_name_source = _attachment_name_source(b_name, body)
-        attachment_filename = _email_attachment_filename(attachment_name_source, file.filename)
+        attachment_filename = _pdf_attachment_filename(file.filename)
 
         business_name_text = b_name or ""
         client_name_text = (client_name or "").strip()
