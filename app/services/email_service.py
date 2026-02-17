@@ -8,6 +8,7 @@ import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import policy
 
 from app.config import settings
 from app.utils.logger import logger
@@ -126,7 +127,7 @@ class EmailService:
                 "SMTP port not configured. Please set SMTP_PORT in your .env file (e.g., SMTP_PORT=587)"
             )
 
-        msg = MIMEMultipart()
+        msg = MIMEMultipart(policy=policy.SMTP)
         if from_name is not None:
             effective_from_name = from_name.strip() if from_name else ""
         else:
@@ -145,7 +146,7 @@ class EmailService:
             msg["Reply-To"] = reply_to.strip()
 
         email_body = body or f"Please find attached: {filename}."
-        alt = MIMEMultipart("alternative")
+        alt = MIMEMultipart("alternative", policy=policy.SMTP)
         alt.attach(MIMEText(email_body, "plain", "utf-8"))
         alt.attach(MIMEText(self._body_as_rtl_html(email_body), "html", "utf-8"))
         msg.attach(alt)
