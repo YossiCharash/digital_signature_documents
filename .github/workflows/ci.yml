@@ -90,8 +90,7 @@ jobs:
           file: ./docker/Dockerfile
           push: false
           tags: document-delivery:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          no-cache: true
 
   # ============================================
   # Security Check
