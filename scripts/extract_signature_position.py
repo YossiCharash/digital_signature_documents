@@ -52,20 +52,20 @@ def extract_signature_position(
     # Load signature image
     sig_img = Image.open(signature_image_path)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Reference PDF: {reference_pdf_path}")
     print(f"Signature Image: {signature_image_path}")
     print(f"Page: {page_number + 1} (0-indexed: {page_number})")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print("\nPage dimensions:")
-    print(f"  Width:  {page_rect.width:.2f} points ({page_rect.width/72:.2f} inches)")
-    print(f"  Height: {page_rect.height:.2f} points ({page_rect.height/72:.2f} inches)")
+    print(f"  Width:  {page_rect.width:.2f} points ({page_rect.width / 72:.2f} inches)")
+    print(f"  Height: {page_rect.height:.2f} points ({page_rect.height / 72:.2f} inches)")
     print("\nSignature image dimensions:")
     print(f"  Width:  {sig_img.width} pixels")
     print(f"  Height: {sig_img.height} pixels")
 
     # Manual position entry (since automatic detection is complex)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("To determine the exact position:")
     print("1. Open the reference PDF in a PDF viewer")
     print("2. Measure the signature position:")
@@ -74,7 +74,7 @@ def extract_signature_position(
     print("3. Measure the signature size (if different from image):")
     print("   - Width: width of signature on page (in points)")
     print("   - Height: height of signature on page (in points)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Calculate default size (assuming 96 DPI image, 72 DPI PDF)
     default_width = sig_img.width * 72 / 96
@@ -104,9 +104,13 @@ def extract_signature_position(
 def main():
     """Main entry point."""
     if len(sys.argv) < 3:
-        print("Usage: python scripts/extract_signature_position.py <reference_pdf> <signature_image> [page_number]")
+        print(
+            "Usage: python scripts/extract_signature_position.py <reference_pdf> <signature_image> [page_number]"
+        )
         print("\nExample:")
-        print("  python scripts/extract_signature_position.py reference.pdf assets/signature_stamp.png 0")
+        print(
+            "  python scripts/extract_signature_position.py reference.pdf assets/signature_stamp.png 0"
+        )
         sys.exit(1)
 
     pdf_path = sys.argv[1]

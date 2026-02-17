@@ -21,9 +21,12 @@ router = APIRouter(tags=["documents"])
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _pdf_attachment_filename(original_filename: str) -> str:
     """Normalize filename to .pdf extension (used for S3 key)."""
-    base, _ = (original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, ""))
+    base, _ = (
+        original_filename.rsplit(".", 1) if "." in original_filename else (original_filename, "")
+    )
     return f"{base}.pdf" if base else "document.pdf"
 
 
@@ -101,6 +104,7 @@ def _get_signing_service() -> SigningService:
 # Routes
 # ---------------------------------------------------------------------------
 
+
 @router.post("/documents/send-email", status_code=status.HTTP_200_OK)
 async def send_document_email(
     file: UploadFile = File(..., description="Document file to send"),
@@ -123,7 +127,9 @@ async def send_document_email(
         content = await file.read()
     except Exception as e:
         logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
+        ) from e
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -134,7 +140,9 @@ async def send_document_email(
     attachment_filename = _email_attachment_filename(b_name, file.filename)
     email_body = _build_email_body(b_name, client_name=None, body=body)
 
-    logger.info(f"send-email: business_name='{b_name}', business_email='{b_email}', email='{email}'")
+    logger.info(
+        f"send-email: business_name='{b_name}', business_email='{b_email}', email='{email}'"
+    )
     logger.info(f"send-email: attachment_filename='{attachment_filename}'")
 
     try:
@@ -149,7 +157,9 @@ async def send_document_email(
         )
         logger.info(f"Successfully sent email to client: {email}")
     except EmailDeliveryError as e:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Email delivery failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Email delivery failed: {e}"
+        ) from e
 
     b_email_trimmed = b_email
     if b_email_trimmed:
@@ -167,7 +177,10 @@ async def send_document_email(
             logger.info(f"Successfully sent document copy to business email: {b_email_trimmed}")
         except EmailDeliveryError as e:
             logger.error(f"Failed to send document to business email {b_email_trimmed}: {e}")
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Email delivery failed (business copy): {e}") from e
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Email delivery failed (business copy): {e}",
+            ) from e
     else:
         logger.warning("business_email not provided or empty, skipping business email copy")
 
@@ -196,7 +209,9 @@ async def send_document_sms(
         content = await file.read()
     except Exception as e:
         logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
+        ) from e
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -209,7 +224,9 @@ async def send_document_sms(
             message=message,
         )
     except (StorageError, SMSDeliveryError) as e:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Delivery failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Delivery failed: {e}"
+        ) from e
 
     if not ok:
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="SMS delivery failed")
@@ -243,7 +260,9 @@ async def sign_and_email(
         content = await file.read()
     except Exception as e:
         logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
+        ) from e
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -257,8 +276,12 @@ async def sign_and_email(
     attachment_filename = _email_attachment_filename(b_name, file.filename)
     email_body = _build_email_body(b_name, client_name=client_name, body=body)
 
-    logger.info(f"sign-and-email: business_name='{b_name}', business_email='{b_email}', email='{email}', so='{so}'")
-    logger.info(f"sign-and-email: s3_filename='{s3_filename}', attachment_filename='{attachment_filename}'")
+    logger.info(
+        f"sign-and-email: business_name='{b_name}', business_email='{b_email}', email='{email}', so='{so}'"
+    )
+    logger.info(
+        f"sign-and-email: s3_filename='{s3_filename}', attachment_filename='{attachment_filename}'"
+    )
 
     try:
         signing_svc = _get_signing_service()
@@ -292,7 +315,9 @@ async def sign_and_email(
 
         if b_email:
             if not validate_email(b_email):
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid business email address")
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, detail="Invalid business email address"
+                )
             logger.info(f"Sending document copy to business email: {b_email}")
             try:
                 await _email_service.send_document(
@@ -307,9 +332,14 @@ async def sign_and_email(
                 logger.info(f"Successfully sent document copy to business email: {b_email}")
             except EmailDeliveryError as e:
                 logger.error(f"Failed to send document to business email {b_email}: {e}")
-                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to send copy to business email: {e}") from e
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to send copy to business email: {e}",
+                ) from e
         else:
-            logger.warning("business_email not provided or empty (after sanitize), skipping business email copy")
+            logger.warning(
+                "business_email not provided or empty (after sanitize), skipping business email copy"
+            )
 
         audit_metadata = {
             "s3_key": s3_filename,
@@ -341,16 +371,24 @@ async def sign_and_email(
 
     except SigningError as e:
         logger.error(f"Signing error in sign-and-email: {e}", exc_info=True)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Signing failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Signing failed: {e}"
+        ) from e
     except StorageError as e:
         logger.error(f"Storage error in sign-and-email: {e}", exc_info=True)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"S3 upload failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"S3 upload failed: {e}"
+        ) from e
     except EmailDeliveryError as e:
         logger.error(f"Email delivery error in sign-and-email: {e}", exc_info=True)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Email delivery failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Email delivery failed: {e}"
+        ) from e
     except Exception as e:
         logger.error(f"Unexpected error in sign-and-email: {e}", exc_info=True)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {e}"
+        ) from e
 
 
 @router.post("/documents/sign-and-sms", status_code=status.HTTP_200_OK)
@@ -369,7 +407,9 @@ async def sign_and_sms(
         content = await file.read()
     except Exception as e:
         logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
+        ) from e
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -422,11 +462,17 @@ async def sign_and_sms(
         }
 
     except SigningError as e:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Signing failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Signing failed: {e}"
+        ) from e
     except StorageError as e:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"S3 upload failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"S3 upload failed: {e}"
+        ) from e
     except SMSDeliveryError as e:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"SMS delivery failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"SMS delivery failed: {e}"
+        ) from e
 
 
 @router.post("/documents/verify-signature", status_code=status.HTTP_200_OK)
@@ -441,7 +487,9 @@ async def verify_document_signature(
         content = await file.read()
     except Exception as e:
         logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
+        ) from e
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -450,4 +498,6 @@ async def verify_document_signature(
         verification_result = _get_signing_service().verify_pdf_signature(content)
         return {"filename": file.filename, "verification": verification_result}
     except SigningError as e:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Verification failed: {e}") from e
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Verification failed: {e}"
+        ) from e

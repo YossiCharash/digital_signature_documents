@@ -17,6 +17,7 @@ from app.utils.logger import logger
 
 class EmailDeliveryError(Exception):
     """Raised when email delivery fails."""
+
     pass
 
 
@@ -113,8 +114,11 @@ class EmailService:
         """
         ascii_name = EmailService._ascii_fallback_filename(filename)
         # RFC 5987 percent-encode the UTF-8 bytes; safe chars are unreserved + a few extras
-        encoded_name = quote(filename.encode("utf-8"), safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-        return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+        encoded_name = quote(
+            filename.encode("utf-8"),
+            safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~",
+        )
+        return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
     async def _send_document_via_smtp(
         self,
@@ -141,6 +145,7 @@ class EmailService:
         effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
         if effective_from_name:
             from email.header import Header
+
             encoded_name = str(Header(effective_from_name, "utf-8"))
             msg["From"] = f"{encoded_name} {self.smtp_from_email}"
         else:

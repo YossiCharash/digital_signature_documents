@@ -74,22 +74,26 @@ def find_signature_in_pdf(pdf_path: str, signature_image_path: str) -> None:
 
     pdf_doc.close()
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Example configuration for .env:")
-    print("="*60)
+    print("=" * 60)
     print("SIGNATURE_IMAGE_PATH=assets/signature_stamp.png")
     print("SIGNATURE_POSITION_X=50.0")
     print("SIGNATURE_POSITION_Y=50.0")
     print("SIGNATURE_PAGE=0")
-    print("="*60)
+    print("=" * 60)
 
 
 def main():
     """Main entry point."""
     if len(sys.argv) < 3:
-        print("Usage: python scripts/analyze_signature_position.py <reference_pdf> <signature_image>")
+        print(
+            "Usage: python scripts/analyze_signature_position.py <reference_pdf> <signature_image>"
+        )
         print("\nExample:")
-        print("  python scripts/analyze_signature_position.py reference.pdf assets/signature_stamp.png")
+        print(
+            "  python scripts/analyze_signature_position.py reference.pdf assets/signature_stamp.png"
+        )
         sys.exit(1)
 
     pdf_path = sys.argv[1]

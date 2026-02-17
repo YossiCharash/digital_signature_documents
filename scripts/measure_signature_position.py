@@ -52,6 +52,7 @@ def create_grid_overlay(
 
     # Convert to PIL Image
     from io import BytesIO
+
     img_data = pix.tobytes("png")
     page_img = Image.open(BytesIO(img_data))
 
@@ -102,8 +103,12 @@ def create_grid_overlay(
     # Add corner markers
     corner_size = 20
     # Bottom-left corner (origin)
-    draw.rectangle([(0, img_height - corner_size), (corner_size, img_height)],
-                  fill=(0, 255, 0, 200), outline=(0, 255, 0, 255), width=3)
+    draw.rectangle(
+        [(0, img_height - corner_size), (corner_size, img_height)],
+        fill=(0, 255, 0, 200),
+        outline=(0, 255, 0, 255),
+        width=3,
+    )
     draw.text((5, img_height - 15), "0,0", fill=(0, 255, 0, 255), font=font)
 
     # Add instructions
@@ -141,19 +146,21 @@ def create_grid_overlay(
 
     pdf_doc.close()
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Next steps:")
     print("1. Open the grid image file")
     print("2. Find where the signature stamp is located")
     print("3. Read the X and Y coordinates from the grid lines")
     print("4. Update your .env file with these coordinates")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 def main():
     """Main entry point."""
     if len(sys.argv) < 2:
-        print("Usage: python scripts/measure_signature_position.py <reference_pdf> [page_number] [output_image]")
+        print(
+            "Usage: python scripts/measure_signature_position.py <reference_pdf> [page_number] [output_image]"
+        )
         print("\nExample:")
         print("  python scripts/measure_signature_position.py reference.pdf 0 grid.png")
         sys.exit(1)
@@ -167,6 +174,7 @@ def main():
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

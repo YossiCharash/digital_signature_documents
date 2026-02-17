@@ -116,13 +116,22 @@ def find_small_stamp_position(
     img_y0 = int(img_height - (top_left_rect.y1 * scale_y))
     img_x1 = int(top_left_rect.x1 * scale_x)
     img_y1 = int(img_height - (top_left_rect.y0 * scale_y))
-    draw.rectangle([(img_x0, img_y0), (img_x1, img_y1)], fill=highlight_color, outline=(255, 255, 0, 255), width=2)
+    draw.rectangle(
+        [(img_x0, img_y0), (img_x1, img_y1)],
+        fill=highlight_color,
+        outline=(255, 255, 0, 255),
+        width=2,
+    )
 
     # Add corner markers
     corner_size = 15
     # Bottom-left corner (origin)
-    draw.rectangle([(0, img_height - corner_size), (corner_size, img_height)],
-                  fill=(0, 255, 0, 200), outline=(0, 255, 0, 255), width=2)
+    draw.rectangle(
+        [(0, img_height - corner_size), (corner_size, img_height)],
+        fill=(0, 255, 0, 200),
+        outline=(0, 255, 0, 255),
+        width=2,
+    )
     try:
         font = ImageFont.truetype("arial.ttf", 10)
     except OSError:
@@ -168,9 +177,9 @@ def find_small_stamp_position(
     pdf_doc.close()
 
     # Suggest typical values for small stamp
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Suggested configuration for small stamp:")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print("Based on typical small stamp location (top-left area):")
     print("")
     print("Typical position range:")
@@ -186,14 +195,14 @@ def find_small_stamp_position(
     print(f"  SIGNATURE_POSITION_Y={page_height_pts - 100:.0f}")
     print("  SIGNATURE_WIDTH=50.0")
     print("  SIGNATURE_HEIGHT=50.0")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print("\nNext steps:")
     print("1. Open the grid image file")
     print("2. Find the small yellow-orange stamp")
     print("3. Read the exact X and Y coordinates")
     print("4. Measure the stamp size")
     print("5. Update your .env file with these values")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     return {
         "page_width": page_width_pts,
@@ -207,7 +216,9 @@ def find_small_stamp_position(
 def main():
     """Main entry point."""
     if len(sys.argv) < 2:
-        print("Usage: python scripts/find_small_stamp_position.py <reference_pdf> [page_number] [output_image]")
+        print(
+            "Usage: python scripts/find_small_stamp_position.py <reference_pdf> [page_number] [output_image]"
+        )
         print("\nExample:")
         print("  python scripts/find_small_stamp_position.py reference.pdf 0 small_stamp_grid.png")
         sys.exit(1)
@@ -221,6 +232,7 @@ def main():
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

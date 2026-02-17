@@ -6,7 +6,9 @@ from pathlib import Path
 from PIL import Image
 
 
-def remove_white_background(input_path: str, output_path: str | None = None, threshold: int = 240) -> None:
+def remove_white_background(
+    input_path: str, output_path: str | None = None, threshold: int = 240
+) -> None:
     """
     Remove white background from an image and make it transparent.
 
@@ -20,8 +22,8 @@ def remove_white_background(input_path: str, output_path: str | None = None, thr
     img = Image.open(input_path)
 
     # Convert to RGBA if not already (needed for transparency)
-    if img.mode != 'RGBA':
-        img = img.convert('RGBA')
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
 
     # Get pixel data as a list of tuples (R, G, B, A)
     pixels = list(img.getdata())
@@ -50,7 +52,7 @@ def remove_white_background(input_path: str, output_path: str | None = None, thr
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Save the image with transparency
-    img.save(output_path, 'PNG')
+    img.save(output_path, "PNG")
     print(f"Successfully removed white background from {input_path}")
     print(f"  Saved to: {output_path}")
 
@@ -58,11 +60,17 @@ def remove_white_background(input_path: str, output_path: str | None = None, thr
 def main():
     """Main function to run the script."""
     if len(sys.argv) < 2:
-        print("Usage: python scripts/remove_white_background.py <input_image> [output_image] [threshold]")
+        print(
+            "Usage: python scripts/remove_white_background.py <input_image> [output_image] [threshold]"
+        )
         print("\nExample:")
         print("  python scripts/remove_white_background.py assets/signature_stamp.png")
-        print("  python scripts/remove_white_background.py assets/signature_stamp.png assets/signature_stamp_transparent.png")
-        print("  python scripts/remove_white_background.py assets/signature_stamp.png assets/signature_stamp_transparent.png 230")
+        print(
+            "  python scripts/remove_white_background.py assets/signature_stamp.png assets/signature_stamp_transparent.png"
+        )
+        print(
+            "  python scripts/remove_white_background.py assets/signature_stamp.png assets/signature_stamp_transparent.png 230"
+        )
         sys.exit(1)
 
     input_path = sys.argv[1]

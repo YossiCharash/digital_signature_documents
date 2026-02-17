@@ -19,7 +19,6 @@ def generate_rsa_key_pair(key_size: int = 2048) -> tuple[rsa.RSAPrivateKey, rsa.
     return private_key, public_key
 
 
-
 def save_private_key(key: rsa.RSAPrivateKey, path: Path) -> None:
     """Save private key to file in PEM format."""
     pem = key.private_bytes(
@@ -31,6 +30,7 @@ def save_private_key(key: rsa.RSAPrivateKey, path: Path) -> None:
     # Set restrictive permissions (Unix-like systems)
     try:
         import os
+
         os.chmod(path, 0o600)
     except (OSError, AttributeError):
         pass  # Windows doesn't support chmod the same way
@@ -47,9 +47,7 @@ def save_public_key(key: rsa.RSAPublicKey, path: Path) -> None:
 
 def main() -> None:
     """Generate RSA key pair and save to files."""
-    parser = argparse.ArgumentParser(
-        description="Generate RSA key pair for document signing"
-    )
+    parser = argparse.ArgumentParser(description="Generate RSA key pair for document signing")
     parser.add_argument(
         "--output-dir",
         type=str,
