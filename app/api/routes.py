@@ -17,7 +17,6 @@ from app.utils.validators import validate_email, validate_phone_number
 router = APIRouter(tags=["documents"])
 
 
-# Generic names that should not be used as attachment filename (e.g. from browser "noname")
 
 
 def _pdf_attachment_filename(original_filename: str) -> str:
@@ -34,7 +33,19 @@ def _email_attachment_filename(business_name: str | None, original_filename: str
         if safe:
             base = safe.rsplit(".", 1)[0] if "." in safe else safe
             return f"{base}.pdf" if base else "document.pdf"
-    return _pdf_attachment_filename(original_filename)
+    result = _pdf_attachment_filename(original_filename or "")
+    # When deployed (e.g. Render), client may send file without filename → "noname"; never send that
+    if not (original_filename or "").strip() or (original_filename or "").strip().lower() in ("noname", "unnamed"):
+        logger.debug(
+            "Attachment filename fallback to document.pdf (no business_name and file filename is empty or noname)"
+        )
+        return "document.pdf"
+    if result.lower() == "noname.pdf":
+        logger.debug(
+            "Attachment filename fallback to document.pdf (no business_name and file filename is noname)"
+        )
+        return "document.pdf"
+    return result
 
 
 # Unicode RTL mark so plain-text email clients display Hebrew in correct order
