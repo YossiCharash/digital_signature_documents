@@ -18,7 +18,6 @@ router = APIRouter(tags=["documents"])
 
 
 # Generic names that should not be used as attachment filename (e.g. from browser "noname")
-_GENERIC_FILENAMES = frozenset({"noname", "undefined", "unknown", "untitled", "document", ""})
 
 
 def _pdf_attachment_filename(original_filename: str) -> str:
