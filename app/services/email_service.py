@@ -1,7 +1,6 @@
 """Email delivery service – sends documents as attachments (SMTP or API)."""
 
 import asyncio
-import base64
 import html
 import mimetypes
 import re
@@ -9,9 +8,6 @@ import smtplib
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
-
-import httpx
 
 from app.config import settings
 from app.utils.logger import logger
