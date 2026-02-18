@@ -14,6 +14,7 @@ from app.utils.logger import logger
 
 class EmailDeliveryError(Exception):
     """Raised when email delivery fails."""
+
     pass
 
 
@@ -86,10 +87,33 @@ class EmailService:
     def _ascii_fallback_filename(filename: str) -> str:
         """Transliterates Hebrew to Latin for legacy clients."""
         transliteration = {
-            "א": "a", "ב": "b", "ג": "g", "ד": "d", "ה": "h", "ו": "v", "ז": "z",
-            "ח": "ch", "ט": "t", "י": "y", "כ": "k", "ך": "k", "ל": "l", "מ": "m",
-            "ם": "m", "נ": "n", "ן": "n", "ס": "s", "ע": "", "פ": "p", "ף": "f",
-            "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r", "ש": "sh", "ת": "t",
+            "א": "a",
+            "ב": "b",
+            "ג": "g",
+            "ד": "d",
+            "ה": "h",
+            "ו": "v",
+            "ז": "z",
+            "ח": "ch",
+            "ט": "t",
+            "י": "y",
+            "כ": "k",
+            "ך": "k",
+            "ל": "l",
+            "מ": "m",
+            "ם": "m",
+            "נ": "n",
+            "ן": "n",
+            "ס": "s",
+            "ע": "",
+            "פ": "p",
+            "ף": "f",
+            "צ": "tz",
+            "ץ": "tz",
+            "ק": "k",
+            "ר": "r",
+            "ש": "sh",
+            "ת": "t",
         }
         result = []
         for char in filename:
@@ -114,6 +138,7 @@ class EmailService:
         but we keep the function to avoid breaking internal calls.
         """
         from email.header import Header
+
         encoded_filename = str(Header(filename, "utf-8"))
         return f'attachment; filename="{encoded_filename}"'
 
@@ -159,10 +184,7 @@ class EmailService:
 
             # הוספת הקובץ - פייתון תייצר את ה-Headers הנכונים לעברית באופן אוטומטי
             msg.add_attachment(
-                document,
-                maintype=main_type,
-                subtype=sub_type,
-                filename=effective_filename
+                document, maintype=main_type, subtype=sub_type, filename=effective_filename
             )
 
         loop = asyncio.get_event_loop()
