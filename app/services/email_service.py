@@ -150,18 +150,17 @@ class EmailService:
 
     @staticmethod
     def _content_disposition(filename: str) -> str:
-        """Build a Content-Disposition header value that supports Unicode filenames.
+        """Build Content-Disposition header with RFC 2047 encoding for Gmail.
 
-        Produces:  attachment; filename="ascii_fallback.pdf"; filename*=UTF-8''encoded_name.pdf
-        per RFC 5987 / RFC 6266.  Modern clients use filename*; legacy clients fall back to filename.
+        Gmail ignores filename*= completely and only reads filename=.
+        We use RFC 2047 encoding (=?UTF-8?B?...?=) which Gmail does support.
         """
-        ascii_name = EmailService._ascii_fallback_filename(filename)
-        # RFC 5987 percent-encode the UTF-8 bytes; safe chars are unreserved + a few extras
-        encoded_name = quote(
-            filename.encode("utf-8"),
-            safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~",
-        )
-        return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
+        from email.header import Header
+
+        # RFC 2047 encodes the filename directly into the filename= parameter
+        # This works in Gmail, Outlook, Apple Mail, and most modern clients
+        encoded_filename = str(Header(filename, "utf-8"))
+        return f'attachment; filename="{encoded_filename}"'
 
     async def _send_document_via_smtp(
         self,
