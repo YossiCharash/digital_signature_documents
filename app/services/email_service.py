@@ -162,7 +162,7 @@ class EmailService:
         effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
         if effective_from_name:
             # EmailMessage יודע לטפל בקידוד שם השולח אוטומטית
-            msg["From"] = f"{effective_from_name} <{self.smtp_from_email}>"
+            msg["From"] = f"{effective_from_name}"
         else:
             msg["From"] = self.smtp_from_email
 
