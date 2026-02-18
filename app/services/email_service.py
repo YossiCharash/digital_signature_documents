@@ -6,10 +6,7 @@ import mimetypes
 import re
 import smtplib
 from email import policy
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from urllib.parse import quote
+from email.message import EmailMessage
 
 from app.config import settings
 from app.utils.logger import logger
@@ -17,7 +14,6 @@ from app.utils.logger import logger
 
 class EmailDeliveryError(Exception):
     """Raised when email delivery fails."""
-
     pass
 
 
@@ -43,7 +39,7 @@ class EmailService:
         self.smtp_user = smtp_user or settings.smtp_user
         self.smtp_password = smtp_password or settings.smtp_password
         self.smtp_use_tls = smtp_use_tls if smtp_use_tls is not None else settings.smtp_use_tls
-        self.smtp_from_email = smtp_from_email or settings.smtp_from_email
+        self.smtp_from_email = smtp_from_email
         self.smtp_from_name = smtp_from_name or settings.smtp_from_name
         self.api_url = api_url or settings.email_api_url
         self.api_key = api_key or settings.email_api_key
@@ -76,7 +72,7 @@ class EmailService:
 
     @staticmethod
     def _body_as_rtl_html(body: str) -> str:
-        """Wrap plain body in HTML with dir=rtl and lang=he for RTL display in email clients."""
+        """Wrap plain body in HTML with dir=rtl and lang=he for RTL display."""
         escaped = html.escape(body)
         with_br = escaped.replace("\n", "<br>\n")
         return (
@@ -88,43 +84,13 @@ class EmailService:
 
     @staticmethod
     def _ascii_fallback_filename(filename: str) -> str:
-        """Return an ASCII-only filename with Hebrew transliteration.
-
-        Transliterates Hebrew to Latin characters so legacy email clients
-        see a meaningful filename (e.g., 'yossi_pataronot.pdf' instead of 'document.pdf').
-        Modern clients will use filename*= with the original Hebrew.
-        """
-        # Hebrew to Latin transliteration map
+        """Transliterates Hebrew to Latin for legacy clients."""
         transliteration = {
-            "א": "a",
-            "ב": "b",
-            "ג": "g",
-            "ד": "d",
-            "ה": "h",
-            "ו": "v",
-            "ז": "z",
-            "ח": "ch",
-            "ט": "t",
-            "י": "y",
-            "כ": "k",
-            "ך": "k",
-            "ל": "l",
-            "מ": "m",
-            "ם": "m",
-            "נ": "n",
-            "ן": "n",
-            "ס": "s",
-            "ע": "",
-            "פ": "p",
-            "ף": "f",
-            "צ": "tz",
-            "ץ": "tz",
-            "ק": "k",
-            "ר": "r",
-            "ש": "sh",
-            "ת": "t",
+            "א": "a", "ב": "b", "ג": "g", "ד": "d", "ה": "h", "ו": "v", "ז": "z",
+            "ח": "ch", "ט": "t", "י": "y", "כ": "k", "ך": "k", "ל": "l", "מ": "m",
+            "ם": "m", "נ": "n", "ן": "n", "ס": "s", "ע": "", "פ": "p", "ף": "f",
+            "צ": "tz", "ץ": "tz", "ק": "k", "ר": "r", "ש": "sh", "ת": "t",
         }
-
         result = []
         for char in filename:
             if char in transliteration:
@@ -135,30 +101,19 @@ class EmailService:
                 result.append("_")
 
         safe = "".join(result).strip()
-        safe = re.sub(r"[_\s]+", "_", safe)  # Collapse multiple underscores/spaces
+        safe = re.sub(r"[_\s]+", "_", safe)
 
-        base_match = re.match(r"^(.*)\.([a-zA-Z0-9]+)$", safe)
-        if base_match:
-            base, ext = base_match.groups()
-        else:
-            base, ext = safe, "pdf"
-
-        if not base or all(c in "_." for c in base):
-            return f"document.{ext}" if ext else "document.pdf"
-
-        return f"{base}.{ext}" if ext else f"{base}.pdf"
+        if not safe or all(c in "_." for c in safe):
+            return "document.pdf"
+        return safe
 
     @staticmethod
     def _content_disposition(filename: str) -> str:
-        """Build Content-Disposition header with RFC 2047 encoding for Gmail.
-
-        Gmail ignores filename*= completely and only reads filename=.
-        We use RFC 2047 encoding (=?UTF-8?B?...?=) which Gmail does support.
+        """
+        Legacy helper. In the new version, EmailMessage handles this,
+        but we keep the function to avoid breaking internal calls.
         """
         from email.header import Header
-
-        # RFC 2047 encodes the filename directly into the filename= parameter
-        # This works in Gmail, Outlook, Apple Mail, and most modern clients
         encoded_filename = str(Header(filename, "utf-8"))
         return f'attachment; filename="{encoded_filename}"'
 
@@ -173,23 +128,16 @@ class EmailService:
         reply_to: str | None,
     ) -> bool:
         if not self.smtp_host or not self.smtp_host.strip():
-            raise EmailDeliveryError(
-                "SMTP host not configured. Set SMTP_HOST in your .env file (e.g. smtp.gmail.com)"
-            )
-        if not self.smtp_port:
-            raise EmailDeliveryError(
-                "SMTP port not configured. Set SMTP_PORT in your .env file (e.g. 587)"
-            )
+            raise EmailDeliveryError("SMTP host not configured.")
 
-        msg = MIMEMultipart(policy=policy.SMTP)
+        # בניית ההודעה באמצעות האובייקט המודרני
+        msg = EmailMessage(policy=policy.SMTP)
 
         # --- Sender ---
         effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
         if effective_from_name:
-            from email.header import Header
-
-            encoded_name = str(Header(effective_from_name, "utf-8"))
-            msg["From"] = f"{encoded_name} {self.smtp_from_email}"
+            # EmailMessage יודע לטפל בקידוד שם השולח אוטומטית
+            msg["From"] = f"{effective_from_name} <{self.smtp_from_email}>"
         else:
             msg["From"] = self.smtp_from_email
 
@@ -200,10 +148,8 @@ class EmailService:
 
         # --- Body ---
         email_body = body or f"Please find attached: {filename}."
-        alt = MIMEMultipart("alternative", policy=policy.SMTP)
-        alt.attach(MIMEText(email_body, "plain", "utf-8"))
-        alt.attach(MIMEText(self._body_as_rtl_html(email_body), "html", "utf-8"))
-        msg.attach(alt)
+        msg.set_content(email_body)  # Plain text version
+        msg.add_alternative(self._body_as_rtl_html(email_body), subtype="html")  # HTML RTL version
 
         # --- Attachment ---
         if document:
@@ -211,25 +157,20 @@ class EmailService:
             content_type = self._content_type_for(effective_filename)
             main_type, sub_type = content_type.split("/", 1)
 
-            attachment = MIMEApplication(document, _subtype=sub_type)
-
-            # Use RFC 5987 encoding so Hebrew (and any Unicode) filenames are preserved.
-            # Both filename= (ASCII fallback) and filename*= (UTF-8) are set so all
-            # mail clients display the correct name.
-            attachment["Content-Disposition"] = self._content_disposition(effective_filename)
-            attachment["Content-Type"] = (
-                f"{content_type}; "
-                f'name="{self._ascii_fallback_filename(effective_filename)}"; '
-                f"name*=UTF-8''{quote(effective_filename.encode('utf-8'), safe='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~')}"
+            # הוספת הקובץ - פייתון תייצר את ה-Headers הנכונים לעברית באופן אוטומטי
+            msg.add_attachment(
+                document,
+                maintype=main_type,
+                subtype=sub_type,
+                filename=effective_filename
             )
-            msg.attach(attachment)
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._send_smtp_sync, msg)
         logger.info(f"Document '{filename}' sent via SMTP to {to_email}")
         return True
 
-    def _send_smtp_sync(self, msg: MIMEMultipart) -> None:
+    def _send_smtp_sync(self, msg: EmailMessage) -> None:
         if not self.smtp_host:
             raise EmailDeliveryError("SMTP host not configured")
         try:
@@ -241,22 +182,9 @@ class EmailService:
 
             if self.smtp_user and self.smtp_password:
                 server.login(self.smtp_user, self.smtp_password)
+
+            # EmailMessage תואם ל-send_message
             server.send_message(msg)
             server.quit()
-        except OSError as e:
-            error_code = getattr(e, "winerror", None) or getattr(e, "errno", None)
-            if error_code == 11001 or (hasattr(e, "errno") and e.errno in (11001, -2, -3)):
-                raise EmailDeliveryError(
-                    f"Failed to resolve SMTP host '{self.smtp_host}'. "
-                    f"Check that SMTP_HOST is correct in your .env file. "
-                    f"Common values: smtp.gmail.com, smtp.outlook.com, smtp.mail.yahoo.com"
-                ) from e
-            raise EmailDeliveryError(
-                f"SMTP connection failed to {self.smtp_host}:{self.smtp_port}: {e}"
-            ) from e
-        except smtplib.SMTPAuthenticationError as e:
-            raise EmailDeliveryError(
-                "SMTP authentication failed. Check SMTP_USER and SMTP_PASSWORD in your .env file"
-            ) from e
-        except smtplib.SMTPException as e:
+        except Exception as e:
             raise EmailDeliveryError(f"SMTP error: {e}") from e
