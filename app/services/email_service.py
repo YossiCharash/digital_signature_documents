@@ -17,7 +17,6 @@ from app.utils.logger import logger
 
 class EmailDeliveryError(Exception):
     """Raised when email delivery fails."""
-
     pass
 
 
@@ -88,22 +87,42 @@ class EmailService:
 
     @staticmethod
     def _ascii_fallback_filename(filename: str) -> str:
-        """Return an ASCII-only filename for email clients that don't support UTF-8.
+        """Return an ASCII-only filename with Hebrew transliteration.
 
-        Used only as the legacy 'filename=' parameter; the RFC 5987
-        'filename*=' parameter carries the real Unicode name.
+        Transliterates Hebrew to Latin characters so legacy email clients
+        see a meaningful filename (e.g., 'yossi_pataronot.pdf' instead of 'document.pdf').
+        Modern clients will use filename*= with the original Hebrew.
         """
-        safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename).strip()
-        base_match = re.match(r"^(.*)\.([a-zA-Z0-9]+)$", safe)
+        # Hebrew to Latin transliteration map
+        transliteration = {
+            'א': 'a', 'ב': 'b', 'ג': 'g', 'ד': 'd', 'ה': 'h', 'ו': 'v', 'ז': 'z',
+            'ח': 'ch', 'ט': 't', 'י': 'y', 'כ': 'k', 'ך': 'k', 'ל': 'l', 'מ': 'm',
+            'ם': 'm', 'נ': 'n', 'ן': 'n', 'ס': 's', 'ע': '', 'פ': 'p', 'ף': 'f',
+            'צ': 'tz', 'ץ': 'tz', 'ק': 'k', 'ר': 'r', 'ש': 'sh', 'ת': 't'
+        }
+
+        result = []
+        for char in filename:
+            if char in transliteration:
+                result.append(transliteration[char])
+            elif char.isascii() and (char.isalnum() or char in '._- '):
+                result.append(char)
+            else:
+                result.append('_')
+
+        safe = ''.join(result).strip()
+        safe = re.sub(r'[_\s]+', '_', safe)  # Collapse multiple underscores/spaces
+
+        base_match = re.match(r'^(.*)\.([a-zA-Z0-9]+)$', safe)
         if base_match:
             base, ext = base_match.groups()
         else:
-            base, ext = safe, ""
+            base, ext = safe, 'pdf'
 
-        if not base or all(c in "_." for c in base):
+        if not base or all(c in '_.' for c in base):
             return f"document.{ext}" if ext else "document.pdf"
 
-        return safe if ext else f"{safe}.pdf"
+        return f"{base}.{ext}" if ext else f"{base}.pdf"
 
     @staticmethod
     def _content_disposition(filename: str) -> str:
@@ -114,11 +133,8 @@ class EmailService:
         """
         ascii_name = EmailService._ascii_fallback_filename(filename)
         # RFC 5987 percent-encode the UTF-8 bytes; safe chars are unreserved + a few extras
-        encoded_name = quote(
-            filename.encode("utf-8"),
-            safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~",
-        )
-        return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
+        encoded_name = quote(filename.encode("utf-8"), safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
 
     async def _send_document_via_smtp(
         self,
@@ -145,7 +161,6 @@ class EmailService:
         effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
         if effective_from_name:
             from email.header import Header
-
             encoded_name = str(Header(effective_from_name, "utf-8"))
             msg["From"] = f"{encoded_name} {self.smtp_from_email}"
         else:
