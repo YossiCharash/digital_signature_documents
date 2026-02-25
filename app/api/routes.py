@@ -70,13 +70,13 @@ def _build_email_body(business_name: str | None, client_name: str | None, body: 
 
     if body_text and body_text.lower() != "none":
         if business and business not in body_text:
-            return f'-שלום רב!\n\nהמסמך מ-{business} מצו"ב למייל\n\n{body_text}'
+            return f'שלום רב!\n\nהמסמך מ-{business} מצו"ב למייל\n\n{body_text}'
         return body_text
 
     if business:
-        return f'-שלום רב!\n\nהמסמך מ-{business} מצו"ב למייל\n\nתודה'
+        return f'שלום רב!\n\nהמסמך מ-{business} מצו"ב למייל\n\nתודה'
     if client:
-        return f'-שלום רב!\n\nהמסמך מ-{client} מצו"ב למייל\n\nתודה'
+        return f'שלום רב!\n\nהמסמך מ-{client} מצו"ב למייל\n\nתודה'
     return 'שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה'
 
 
