@@ -40,7 +40,7 @@ class EmailService:
         self.smtp_user = smtp_user or settings.smtp_user
         self.smtp_password = smtp_password or settings.smtp_password
         self.smtp_use_tls = smtp_use_tls if smtp_use_tls is not None else settings.smtp_use_tls
-        self.smtp_from_email = smtp_from_email
+        self.smtp_from_email = smtp_from_email or settings.smtp_from_email
         self.smtp_from_name = smtp_from_name or settings.smtp_from_name
         self.api_url = api_url or settings.email_api_url
         self.api_key = api_key or settings.email_api_key
@@ -161,8 +161,7 @@ class EmailService:
         # --- Sender ---
         effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
         if effective_from_name:
-            # EmailMessage יודע לטפל בקידוד שם השולח אוטומטית
-            msg["From"] = f"{effective_from_name}"
+            msg["From"] = f"{effective_from_name} <{self.smtp_from_email}>"
         else:
             msg["From"] = self.smtp_from_email
 
