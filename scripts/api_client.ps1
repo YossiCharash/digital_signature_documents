@@ -294,15 +294,3 @@ while ($attempt -lt $maxAttempts) {
     }
 }
 
-# Output and exit
-if ($respBody) { Write-Host $respBody }
-
-if ($statusCode -ge 200 -and $statusCode -lt 300) {
-    Write-Host ""
-    Write-Host "[OK] Success (HTTP $statusCode)"
-    exit 0
-} else {
-    Write-Host ""
-    Write-Host ("[ERROR] Server returned HTTP {0}" -f $statusCode)
-    exit 1
-}
