@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
-    smtp_from_email: str = "noreply@example.com"
-    smtp_from_name: str = "Document Delivery"
+    smtp_from_email: str
+    smtp_from_name: str
     email_api_url: str | None = None
     email_api_key: str | None = None
 

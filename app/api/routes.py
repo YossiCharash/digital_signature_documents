@@ -5,6 +5,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
+from app.config import Settings
 from app.delivery import EmailDocumentDeliverer, SMSDocumentDeliverer
 from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
@@ -134,7 +135,7 @@ async def send_document_email(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    b_name = _sanitize(business_name)
+    b_name = Settings.smtp_from_name
     b_email = _sanitize(business_email)
     effective_subject = subject or so
     attachment_filename = _email_attachment_filename(b_name, file.filename)
@@ -267,7 +268,7 @@ async def sign_and_email(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    b_name = _sanitize(business_name)
+    b_name = Settings.smtp_from_name
     b_email = _sanitize(business_email)
     effective_subject = subject or so
 

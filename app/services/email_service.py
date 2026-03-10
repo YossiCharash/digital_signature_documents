@@ -8,7 +8,7 @@ import smtplib
 from email import policy
 from email.message import EmailMessage
 
-from app.config import settings
+from app.config import settings, Settings
 from app.utils.logger import logger
 
 
