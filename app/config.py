@@ -36,9 +36,9 @@ class Settings(BaseSettings):
 
     # SMS
     sms_provider: str = "api"
-    sms_api_url: str | None = None
+    sms_api_url: str | None = 'https://capi.inforu.co.il/api/v2/SMS/SendSms'
     sms_api_key: str | None = None
-    sms_sender_name: str = "DocDelivery"
+    sms_sender_name: str = "נוהלים"
 
     # S3 (required for SMS download links)
     s3_enabled: bool = False
