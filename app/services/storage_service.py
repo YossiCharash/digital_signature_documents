@@ -6,7 +6,7 @@ import requests
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from app.config import Settings, settings
+from app.config import settings
 from app.utils.logger import logger
 
 
@@ -38,9 +38,11 @@ class StorageService:
         }
         if settings.s3_endpoint_url:
             kwargs["endpoint_url"] = settings.s3_endpoint_url
-        self.s3_client = boto3.client("s3",
-                                      region_name=Settings.s3_region,
-                                      config=Config(signature_version="s3v4"), **kwargs)
+        self.s3_client = boto3.client(
+            "s3",
+            region_name=settings.s3_region,
+            config=Config(signature_version="s3v4")
+        )
 
     def upload_file(
             self,

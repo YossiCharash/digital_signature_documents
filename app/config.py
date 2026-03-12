@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # S3 (required for SMS download links)
     s3_enabled: bool = False
     s3_bucket_name: str | None = None
-    s3_region: str = "us-east-1"
+    s3_region: str = None
     s3_access_key: str | None = None
     s3_secret_key: str | None = None
     s3_endpoint_url: str | None = None
