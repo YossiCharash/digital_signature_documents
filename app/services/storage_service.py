@@ -3,9 +3,10 @@ import base64
 
 import boto3
 import requests
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from app.config import settings
+from app.config import settings, Settings
 from app.utils.logger import logger
 
 
@@ -37,7 +38,9 @@ class StorageService:
         }
         if settings.s3_endpoint_url:
             kwargs["endpoint_url"] = settings.s3_endpoint_url
-        self.s3_client = boto3.client("s3", **kwargs)
+        self.s3_client = boto3.client("s3",
+                                      region_name=Settings.s3_region,
+                                      config=Config(signature_version="s3v4"), **kwargs)
 
     def upload_file(
             self,
