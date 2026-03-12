@@ -288,7 +288,6 @@ async def sign_and_sms(
             },
         )
         download_url = _storage_service.generate_presigned_url(pdf_filename)
-        print(business_name)
         await _sms_service.send_document_link(
             to_phone=phone,
             document_url=download_url,

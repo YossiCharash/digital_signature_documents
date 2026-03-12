@@ -61,6 +61,7 @@ class SMSService:
         sms_message = f"שלום, המסמך שלך מ-{business_name} מוכן להורדה."
         if document_url:
             sms_message += f"\nלהורדה: {document_url}"
+        print(sms_message)
 
         payload = {
             "sendId": self.api_key,

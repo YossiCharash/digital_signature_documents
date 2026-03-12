@@ -40,6 +40,8 @@ class StorageService:
             kwargs["endpoint_url"] = settings.s3_endpoint_url
         self.s3_client = boto3.client(
             "s3",
+            aws_access_key_id=settings.s3_access_key,
+            aws_secret_access_key=settings.s3_secret_key,
             region_name=settings.s3_region,
             config=Config(signature_version="s3v4")
         )
@@ -111,7 +113,6 @@ def shorten_url(url: str) -> str:
         response = requests.get(api_url, params=params, timeout=5)
 
         if response.status_code == 200:
-            print(str(response))
             return response.text.strip()
 
     except requests.RequestException:
