@@ -16,11 +16,11 @@ class SMSService:
     """Service for sending SMS with document download links (single responsibility)."""
 
     def __init__(
-        self,
-        provider: str | None = None,
-        api_url: str | None = None,
-        api_key: str | None = None,
-        sender_name: str | None = None,
+            self,
+            provider: str | None = None,
+            api_url: str | None = None,
+            api_key: str | None = None,
+            sender_name: str | None = None,
     ):
         self.provider = provider or settings.sms_provider
         self.api_url = api_url or settings.sms_api_url
@@ -28,17 +28,18 @@ class SMSService:
         self.sender_name = sender_name or settings.sms_sender_name
 
     async def send_document_link(
-        self,
-        to_phone: str,
-        document_url: str,
-        message: str | None = None,
+            self,
+            to_phone: str,
+            document_url: str,
+            business_name: str,
+            message: str | None = None,
     ) -> bool:
         """Send SMS with link to download document from S3."""
         try:
             logger.info(f"Sending document link via SMS to {to_phone}")
 
             if self.provider == "api":
-                return await self._send_via_api(to_phone, document_url, message)
+                return await self._send_via_api(to_phone, document_url, business_name)
             raise SMSDeliveryError(f"Unknown SMS provider: {self.provider}")
 
         except SMSDeliveryError:
@@ -48,42 +49,43 @@ class SMSService:
             raise SMSDeliveryError(f"SMS delivery failed: {e}") from e
 
     async def _send_via_api(
-        self,
-        to_phone: str,
-        document_url: str,
-        message: str | None,
+            self,
+            to_phone: str,
+            document_url: str,
+            business_name: str
     ) -> bool:
         if not self.api_url:
             raise SMSDeliveryError("SMS API URL not configured")
         if not self.api_key:
             raise SMSDeliveryError("SMS API key not configured")
-        normalized = self._normalize_phone(to_phone)
-        sms_message = message or "שלום, המסמך שלך מוכן להורדה."
+        sms_message = f"שלום, המסמך שלך מ-{business_name} מוכן להורדה."
         if document_url:
             sms_message += f"\nלהורדה: {document_url}"
 
         payload = {
-            "to": normalized,
-            "message": sms_message,
-            "sender": self.sender_name,
+            "sendId": self.api_key,
+            "isAsync": "true",
+            "smsSendData": {
+                "fromNumber": "0548508540",
+                "toNumberList": [
+                    to_phone
+                ],
+                "referenceList": [
+                    "string"
+                ],
+                "textList": [
+                    sms_message
+                ],
+                "isAutomaticUnsubscribeLink": "false"
+            }
         }
+        print(sms_message)
 
-        # Try different authentication formats for PulseEM
-        # PulseEM might use X-API-Key, Authorization (with/without Bearer), or other formats
-
-        # Check if API key already has a prefix
-        if self.api_key.startswith("Bearer ") or self.api_key.startswith("bearer "):
-            # Already formatted, use as-is
-            headers = {
-                "Authorization": self.api_key,
-                "Content-Type": "application/json",
-            }
-        else:
-            # Try X-API-Key first (common for PulseEM and similar APIs)
-            headers = {
-                "X-API-Key": self.api_key,
-                "Content-Type": "application/json",
-            }
+        headers = {
+            "APIKey": self.api_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
 
         logger.debug(f"Sending SMS request to {self.api_url}")
         logger.debug(f"Headers: {list(headers.keys())}")
@@ -148,7 +150,7 @@ class SMSService:
                     error_body = last_error.response.json()
                     if isinstance(error_body, dict):
                         error_msg = (
-                            error_body.get("message") or error_body.get("error") or str(error_body)
+                                error_body.get("message") or error_body.get("error") or str(error_body)
                         )
                         error_detail = f"{error_detail}: {error_msg}"
                     else:
@@ -175,13 +177,3 @@ class SMSService:
 
         logger.info("SMS with document link sent successfully")
         return True
-
-    def _normalize_phone(self, phone: str) -> str:
-        digits = "".join(filter(str.isdigit, phone))
-        if digits.startswith("0") and len(digits) == 10:
-            return "972" + digits[1:]
-        if digits.startswith("972") and len(digits) == 12:
-            return digits
-        if len(digits) == 9:
-            return "972" + digits
-        return digits

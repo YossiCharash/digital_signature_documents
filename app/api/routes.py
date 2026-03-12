@@ -1,16 +1,16 @@
 """API routes: send document via email or SMS."""
-
+import base64
 import re
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from starlette.responses import RedirectResponse
 
 from app.config import Settings
-from app.delivery import EmailDocumentDeliverer, SMSDocumentDeliverer
 from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
 from app.services.sms_service import SMSDeliveryError, SMSService
-from app.services.storage_service import StorageError, StorageService
+from app.services.storage_service import StorageError, StorageService, decode_url
 from app.utils.audit import log_operation
 from app.utils.logger import logger
 from app.utils.validators import validate_email, validate_phone_number
@@ -80,13 +80,6 @@ def _build_email_body(business_name: str | None, client_name: str | None, body: 
         return f'שלום רב!\n\nהמסמך מ-{client} מצו"ב למייל\n\nתודה'
     return 'שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה'
 
-
-# ---------------------------------------------------------------------------
-# Services
-# ---------------------------------------------------------------------------
-
-_email_deliverer = EmailDocumentDeliverer()
-_sms_deliverer = SMSDocumentDeliverer()
 _signing_service: SigningService | None = None
 _storage_service = StorageService()
 _email_service = EmailService()
@@ -100,144 +93,6 @@ def _get_signing_service() -> SigningService:
         _signing_service = SigningService()
     return _signing_service
 
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-
-@router.post("/documents/send-email", status_code=status.HTTP_200_OK)
-async def send_document_email(
-    file: UploadFile = File(..., description="Document file to send"),
-    email: str = Form(..., description="Recipient email"),
-    subject: str | None = Form(None, description="Email subject"),
-    so: str | None = Form(None, description="(legacy) Email subject"),
-    body: str | None = Form(None, description="Email body"),
-    business_name: str | None = Form(None, description="Business name to show as sender name"),
-    business_email: str | None = Form(None, description="Business email to also send document to"),
-) -> dict:
-    """Receive a document and send it via email as attachment."""
-    if not file.filename:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must have a filename")
-    if not validate_email(email):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid email address")
-    if business_email and not validate_email(business_email):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid business email address")
-
-    try:
-        content = await file.read()
-    except Exception as e:
-        logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
-        ) from e
-
-    if not content:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
-
-    b_name = Settings.smtp_from_name
-    b_email = _sanitize(business_email)
-    effective_subject = subject or so
-    attachment_filename = _email_attachment_filename(b_name, file.filename)
-    email_body = _build_email_body(b_name, client_name=None, body=body)
-
-    logger.info(
-        f"send-email: business_name='{b_name}', business_email='{b_email}', email='{email}'"
-    )
-    logger.info(f"send-email: attachment_filename='{attachment_filename}'")
-
-    try:
-        await _email_service.send_document(
-            to_email=email,
-            document=content,
-            filename=attachment_filename,
-            subject=effective_subject or f"Document: {attachment_filename}",
-            body=email_body,
-            from_name=b_name,
-            reply_to=b_email,
-        )
-        logger.info(f"Successfully sent email to client: {email}")
-    except EmailDeliveryError as e:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Email delivery failed: {e}"
-        ) from e
-
-    b_email_trimmed = b_email
-    if b_email_trimmed:
-        logger.info(f"Sending document copy to business email: {b_email_trimmed}")
-        try:
-            await _email_service.send_document(
-                to_email=b_email_trimmed,
-                document=content,
-                filename=attachment_filename,
-                subject=effective_subject or f"Document: {attachment_filename}",
-                body=email_body,
-                from_name=b_name,
-                reply_to=b_email_trimmed,
-            )
-            logger.info(f"Successfully sent document copy to business email: {b_email_trimmed}")
-        except EmailDeliveryError as e:
-            logger.error(f"Failed to send document to business email {b_email_trimmed}: {e}")
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Email delivery failed (business copy): {e}",
-            ) from e
-    else:
-        logger.warning("business_email not provided or empty, skipping business email copy")
-
-    return {
-        "status": "sent",
-        "delivery": "email",
-        "recipient": email,
-        **({"business_recipient": b_email} if b_email else {}),
-        "filename": attachment_filename,
-    }
-
-
-@router.post("/documents/send-sms", status_code=status.HTTP_200_OK)
-async def send_document_sms(
-    file: UploadFile = File(..., description="Document file to send"),
-    phone: str = Form(..., description="Recipient phone number"),
-    message: str | None = Form(None, description="Optional SMS message"),
-) -> dict:
-    """Receive a document, upload to S3, and send SMS with download link."""
-    if not file.filename:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must have a filename")
-    if not validate_phone_number(phone):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid phone number")
-
-    try:
-        content = await file.read()
-    except Exception as e:
-        logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
-        ) from e
-
-    if not content:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
-
-    try:
-        ok = await _sms_deliverer.deliver(
-            document=content,
-            filename=file.filename,
-            recipient=phone,
-            message=message,
-        )
-    except (StorageError, SMSDeliveryError) as e:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Delivery failed: {e}"
-        ) from e
-
-    if not ok:
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="SMS delivery failed")
-
-    return {
-        "status": "sent",
-        "delivery": "sms",
-        "recipient": phone,
-        "filename": file.filename,
-    }
 
 
 @router.post("/documents/sign-and-email", status_code=status.HTTP_200_OK)
@@ -274,6 +129,7 @@ async def sign_and_email(
 
     # s3_filename uses the raw normalized name; attachment_filename uses business name
     s3_filename = _pdf_attachment_filename(file.filename)
+    print(s3_filename)
     attachment_filename = _email_attachment_filename(b_name, file.filename)
     email_body = _build_email_body(b_name, client_name=client_name, body=body)
 
@@ -397,6 +253,7 @@ async def sign_and_sms(
     file: UploadFile = File(..., description="PDF document to sign and send"),
     phone: str = Form(..., description="Recipient phone number"),
     message: str | None = Form(None, description="Optional SMS message"),
+    business_name: str = Form(None, description="Business name"),
 ) -> dict:
     """Sign PDF, upload to S3, and send SMS with download link."""
     if not file.filename:
@@ -420,7 +277,6 @@ async def sign_and_sms(
         signed_content, signature_data = signing_svc.sign_pdf(content)
 
         pdf_filename = _pdf_attachment_filename(file.filename)
-
         _storage_service.upload_file(
             content=signed_content,
             filename=pdf_filename,
@@ -434,11 +290,12 @@ async def sign_and_sms(
             },
         )
         download_url = _storage_service.generate_presigned_url(pdf_filename)
-
+        print(business_name)
         await _sms_service.send_document_link(
             to_phone=phone,
             document_url=download_url,
             message=message,
+            business_name=business_name
         )
 
         log_operation(
@@ -502,3 +359,4 @@ async def verify_document_signature(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Verification failed: {e}"
         ) from e
+

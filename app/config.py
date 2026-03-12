@@ -13,7 +13,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
-
+    api_url: str = "http://localhost:8000/"
     app_name: str = "Document Delivery"
     app_version: str = "1.0.0"
     debug: bool = False

@@ -1,9 +1,12 @@
 """Storage service for handling file uploads to S3."""
+import base64
+from botocore.client import Config
 
 import boto3
+import requests
 from botocore.exceptions import ClientError
 
-from app.config import settings
+from app.config import settings, Settings
 from app.utils.logger import logger
 
 
@@ -35,7 +38,7 @@ class StorageService:
         }
         if settings.s3_endpoint_url:
             kwargs["endpoint_url"] = settings.s3_endpoint_url
-        self.s3_client = boto3.client("s3", **kwargs)
+        self.s3_client = boto3.client("s3", config=Config(signature_version="s3v4"),**kwargs)
 
     def upload_file(
         self,
@@ -81,21 +84,54 @@ class StorageService:
             raise StorageError(f"S3 download failed: {e}")
 
     def generate_presigned_url(self, filename: str, expiration: int | None = None) -> str:
-        """Generate a pre-signed URL for a file in S3."""
-        if not self.enabled:
-            # Fallback for local development if S3 is disabled
-            return f"http://localhost:8000/documents/download/{filename}"
-
         if expiration is None:
             expiration = settings.s3_presigned_url_expiration
 
         try:
             url: str = self.s3_client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": self.bucket_name, "Key": filename},
+                ClientMethod="get_object",
+                Params={"Bucket": self.bucket_name, "Key": filename, "ResponseContentDisposition": "inline"},
                 ExpiresIn=expiration,
             )
+            url = shorten_url(url)
             return url
         except ClientError as e:
             logger.error(f"Failed to generate pre-signed URL for {filename}: {e}")
             raise StorageError(f"Failed to generate pre-signed URL: {e}")
+
+def shorten_url(url: str) -> str:
+    api_url = "https://is.gd/create.php"
+    params = {"url": url, "format": "simple"}
+    try:
+        response = requests.get(api_url, params=params, timeout=5)
+
+        if response.status_code == 200:
+            print(str(response))
+            return response.text.strip()
+
+    except requests.RequestException:
+        pass
+
+    return url
+
+
+
+def encode_url(url: str) -> str:
+
+    encoded = base64.urlsafe_b64encode(url.encode()).decode()
+    return encoded.rstrip("=")
+
+
+def decode_url(code: str) -> str:
+
+    padding = '=' * (-len(code) % 4)
+    decoded = base64.urlsafe_b64decode(code + padding).decode()
+    return decoded
+
+def create_short_link(original_url: str) -> str:
+    """
+    יוצר מזהה קצר ושומר את ה-URL המקורי
+    """
+    code = encode_url(original_url)
+    short_link = f"http://localhost:8000/doc/{code}"
+    return short_link
