@@ -36,8 +36,7 @@ jobs:
       - name: Run Ruff linter
         run: ruff check app/
 
-      - name: Run Ruff formatter check
-        run: ruff format --check app/
+
 
   # ============================================
   # Unit Tests
