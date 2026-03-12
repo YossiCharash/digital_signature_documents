@@ -1,16 +1,14 @@
 """API routes: send document via email or SMS."""
-import base64
 import re
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from starlette.responses import RedirectResponse
 
 from app.config import Settings
 from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
 from app.services.sms_service import SMSDeliveryError, SMSService
-from app.services.storage_service import StorageError, StorageService, decode_url
+from app.services.storage_service import StorageError, StorageService
 from app.utils.audit import log_operation
 from app.utils.logger import logger
 from app.utils.validators import validate_email, validate_phone_number

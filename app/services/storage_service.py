@@ -1,9 +1,9 @@
 """Storage service for handling file uploads to S3."""
 import base64
-from botocore.client import Config
 
 import boto3
 import requests
+from botocore.client import Config
 from botocore.exceptions import ClientError
 
 from app.config import settings
@@ -38,14 +38,14 @@ class StorageService:
         }
         if settings.s3_endpoint_url:
             kwargs["endpoint_url"] = settings.s3_endpoint_url
-        self.s3_client = boto3.client("s3", config=Config(signature_version="s3v4"),**kwargs)
+        self.s3_client = boto3.client("s3", config=Config(signature_version="s3v4"), **kwargs)
 
     def upload_file(
-        self,
-        content: bytes,
-        filename: str,
-        content_type: str = "application/json",
-        metadata: dict[str, str] | None = None,
+            self,
+            content: bytes,
+            filename: str,
+            content_type: str = "application/json",
+            metadata: dict[str, str] | None = None,
     ) -> str:
         """Upload file content to S3 with optional metadata."""
         if not self.enabled:
@@ -99,6 +99,7 @@ class StorageService:
             logger.error(f"Failed to generate pre-signed URL for {filename}: {e}")
             raise StorageError(f"Failed to generate pre-signed URL: {e}")
 
+
 def shorten_url(url: str) -> str:
     api_url = "https://is.gd/create.php"
     params = {"url": url, "format": "simple"}
@@ -115,18 +116,16 @@ def shorten_url(url: str) -> str:
     return url
 
 
-
 def encode_url(url: str) -> str:
-
     encoded = base64.urlsafe_b64encode(url.encode()).decode()
     return encoded.rstrip("=")
 
 
 def decode_url(code: str) -> str:
-
     padding = '=' * (-len(code) % 4)
     decoded = base64.urlsafe_b64decode(code + padding).decode()
     return decoded
+
 
 def create_short_link(original_url: str) -> str:
     """
