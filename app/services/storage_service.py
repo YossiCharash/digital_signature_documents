@@ -6,7 +6,7 @@ import requests
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from app.config import settings, Settings
+from app.config import Settings, settings
 from app.utils.logger import logger
 
 
