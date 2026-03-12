@@ -1,5 +1,4 @@
 """Storage service for handling file uploads to S3."""
-import base64
 
 import boto3
 import requests
@@ -119,23 +118,3 @@ def shorten_url(url: str) -> str:
         pass
 
     return url
-
-
-def encode_url(url: str) -> str:
-    encoded = base64.urlsafe_b64encode(url.encode()).decode()
-    return encoded.rstrip("=")
-
-
-def decode_url(code: str) -> str:
-    padding = '=' * (-len(code) % 4)
-    decoded = base64.urlsafe_b64decode(code + padding).decode()
-    return decoded
-
-
-def create_short_link(original_url: str) -> str:
-    """
-    יוצר מזהה קצר ושומר את ה-URL המקורי
-    """
-    code = encode_url(original_url)
-    short_link = f"http://localhost:8000/doc/{code}"
-    return short_link
