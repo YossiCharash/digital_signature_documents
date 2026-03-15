@@ -98,7 +98,7 @@ class StorageService:
                 Params={"Bucket": self.bucket_name, "Key": filename, "ResponseContentDisposition": "inline"},
                 ExpiresIn=expiration,
             )
-            url = shorten_url(url)
+            # url = shorten_url(url)
             return url
         except ClientError as e:
             logger.error(f"Failed to generate pre-signed URL for {filename}: {e}")
