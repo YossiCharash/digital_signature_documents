@@ -13,3 +13,6 @@ Pillow>=10.0.0
 apscheduler>=3.10.4
 pytz>=2024.1
 types-pytz>=2024.1
+# URL shortener (optional – required only when DATABASE_URL is set)
+sqlalchemy>=2.0.0
+asyncpg>=0.29.0

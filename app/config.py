@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     s3_presigned_url_expiration: int = 3600
     s3_cleanup_retention_days: int = 7  # Days to keep documents before cleanup
 
+    # Database (optional – required for the internal URL shortener)
+    database_url: str | None = None
+
     # Signing
     private_key_pem: str | None = None
     private_key_path: str | None = None

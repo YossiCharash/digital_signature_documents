@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
+from app.api.shortlink_routes import shortlink_router
 from app.config import settings
+from app.db import create_tables, init_db
 from app.services.scheduler import SchedulerService
 from app.services.storage_service import StorageService
 from app.utils.logger import logger
@@ -26,6 +28,14 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     settings.ensure_directories()
+
+    # Initialise URL-shortener database (optional)
+    if settings.database_url:
+        init_db(settings.database_url)
+        await create_tables()
+        logger.info("URL shortener database initialised")
+    else:
+        logger.info("DATABASE_URL not set – URL shortener disabled")
 
     # Initialize and start scheduler for cleanup jobs
     storage_service = StorageService()
@@ -58,6 +68,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(router, prefix="/api/v1")
+app.include_router(shortlink_router)  # GET /r/{slug} – no prefix so URLs stay short
 
 
 @app.exception_handler(RequestValidationError)

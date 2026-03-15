@@ -4,10 +4,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
+from app.config import settings
 from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
 from app.services.sms_service import SMSDeliveryError, SMSService
 from app.services.storage_service import StorageError, StorageService
+from app.services.url_shortener_service import create_short_link
 from app.utils.audit import log_operation
 from app.utils.logger import logger
 from app.utils.validators import validate_email, validate_phone_number
@@ -286,11 +288,28 @@ async def sign_and_sms(
             },
         )
         download_url = _storage_service.generate_presigned_url(pdf_filename)
+
+        # Shorten the S3 presigned URL when the database is configured.
+        # The tag uniquely identifies this document upload for tracking purposes.
+        short_url = download_url
+        from app.db import async_session_factory
+
+        if async_session_factory is not None:
+            try:
+                tag = business_name or pdf_filename
+                async with async_session_factory() as db:
+                    link = await create_short_link(db, long_url=download_url, tag=tag)
+                base = settings.api_url.rstrip("/")
+                short_url = f"{base}/r/{link.slug}"
+                logger.info("Short URL created: %s (tag=%s)", short_url, tag)
+            except Exception as exc:
+                logger.warning("URL shortening failed, falling back to original URL: %s", exc)
+
         await _sms_service.send_document_link(
             to_phone=phone,
-            document_url=download_url,
+            document_url=short_url,
             message=message,
-            business_name=business_name
+            business_name=business_name,
         )
 
         log_operation(
@@ -298,7 +317,11 @@ async def sign_and_sms(
             document_hash=signature_data["hash"],
             recipient=phone,
             filename=pdf_filename,
-            metadata={"s3_key": pdf_filename, "signature": signature_data["signature"]},
+            metadata={
+                "s3_key": pdf_filename,
+                "signature": signature_data["signature"],
+                "short_url": short_url,
+            },
         )
 
         return {
@@ -308,6 +331,7 @@ async def sign_and_sms(
             "filename": pdf_filename,
             "s3_key": pdf_filename,
             "download_url": download_url,
+            "short_url": short_url,
             "signature": {
                 "hash": signature_data["hash"],
                 "algorithm": signature_data["algorithm"],
