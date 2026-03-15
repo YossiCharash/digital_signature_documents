@@ -121,18 +121,17 @@ async def sign_and_email(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    b_name = settings.smtp_from_name
     b_email = _sanitize(business_email)
     effective_subject = subject or so
 
     # s3_filename uses the raw normalized name; attachment_filename uses business name
     s3_filename = _pdf_attachment_filename(file.filename)
     print(s3_filename)
-    attachment_filename = _email_attachment_filename(b_name, file.filename)
-    email_body = _build_email_body(b_name, client_name=client_name, body=body)
+    attachment_filename = _email_attachment_filename(business_name, file.filename)
+    email_body = _build_email_body(business_name, client_name=client_name, body=body)
 
     logger.info(
-        f"sign-and-email: business_name='{b_name}', business_email='{b_email}', email='{email}', so='{so}'"
+        f"sign-and-email: business_name='{business_name}', business_email='{b_email}', email='{email}', so='{so}'"
     )
     logger.info(
         f"sign-and-email: s3_filename='{s3_filename}', attachment_filename='{attachment_filename}'"
@@ -156,14 +155,14 @@ async def sign_and_email(
         )
         download_url = _storage_service.generate_presigned_url(s3_filename)
 
-        logger.info(f"Sending email to client: {email}, from_name: '{b_name}'")
+        logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
         await _email_service.send_document(
             to_email=email,
             document=signed_content,
             filename=attachment_filename,
             subject=effective_subject or f"מסמך חתום: {attachment_filename}",
             body=email_body,
-            from_name=b_name,
+            from_name=business_name,
             reply_to=b_email,
         )
         logger.info(f"Successfully sent email to client: {email}")
@@ -181,7 +180,7 @@ async def sign_and_email(
                     filename=attachment_filename,
                     subject=effective_subject or f"מסמך חתום: {attachment_filename}",
                     body=email_body,
-                    from_name=b_name,
+                    from_name=business_name,
                     reply_to=b_email,
                 )
                 logger.info(f"Successfully sent document copy to business email: {b_email}")
@@ -200,7 +199,7 @@ async def sign_and_email(
             "s3_key": s3_filename,
             "signature": signature_data["signature"],
             **({"business_email": b_email} if b_email else {}),
-            **({"business_name": b_name} if b_name else {}),
+            **({"business_name": business_name} if business_name else {}),
         }
         log_operation(
             operation="sign-and-email",
