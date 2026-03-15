@@ -106,15 +106,28 @@ class StorageService:
 
 
 def shorten_url(url: str) -> str:
-    api_url = "https://is.gd/create.php"
-    params = {"url": url, "format": "simple"}
-    try:
-        response = requests.get(api_url, params=params, timeout=5)
+    # רשימת ספקים לפי סדר עדיפות
+    providers = [
+        {"name": "TinyURL", "api": "https://tinyurl.com/api-create.php", "params": {"url": url}},
+        {"name": "is.gd", "api": "https://is.gd/create.php", "params": {"url": url, "format": "simple"}}
+    ]
 
-        if response.status_code == 200:
-            return response.text.strip()
+    for provider in providers:
+        try:
+            # שימוש ב-timeout קצר כדי לא לתקוע את התוכנית אם ספק אחד איטי
+            response = requests.get(provider["api"], params=provider["params"], timeout=3)
 
-    except requests.RequestException:
-        pass
+            if response.status_code == 200:
+                result = response.text.strip()
+                # בדיקה שהתגובה היא אכן URL ולא הודעת שגיאה של ה-Database
+                if result.startswith("http") and "Error" not in result:
+                    return result
 
+            print(f"Warning: {provider['name']} failed with message: {response.text[:50]}")
+
+        except requests.RequestException as e:
+            print(f"Warning: Connection to {provider['name']} failed: {e}")
+
+    # אם כל הניסיונות נכשלו, מחזירים את ה-URL המקורי
+    print("Critical: All URL shorteners failed. Returning original URL.")
     return url
