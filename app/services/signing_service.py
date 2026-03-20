@@ -24,7 +24,7 @@ class SigningError(Exception):
 
 class SigningService:
     def __init__(self):
-        self._private_key = settings.private_key_pem
+        self._private_key = self._load_private_key()
         self._certificate = self._create_self_signed_certificate()
 
     def _load_private_key(self) -> rsa.RSAPrivateKey:
