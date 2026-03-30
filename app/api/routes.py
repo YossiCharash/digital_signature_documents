@@ -31,13 +31,7 @@ def _pdf_attachment_filename(original_filename: str) -> str:
 
 
 def _email_attachment_filename(business_name: str | None, original_filename: str) -> str:
-    """Return the PDF attachment filename for emails.
 
-    Priority:
-    1. business_name  →  e.g. "יוסי פתרונות תוכנה.pdf"
-    2. original_filename (unless empty / noname / unnamed)
-    3. fallback: "document.pdf"
-    """
     if business_name and business_name.strip():
         safe = re.sub(r'[\\/:*?"<>|]', "_", business_name.strip()).strip()
         base = safe.rsplit(".", 1)[0] if "." in safe else safe
