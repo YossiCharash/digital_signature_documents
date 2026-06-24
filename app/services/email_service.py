@@ -5,11 +5,21 @@ import html
 import mimetypes
 import re
 import smtplib
+import time
 from email import policy
 from email.message import EmailMessage
 
 from app.config import settings
 from app.utils.logger import logger
+
+# Network timeout (seconds) for the SMTP connection so a slow/unresponsive
+# server can never hang the worker indefinitely.
+SMTP_TIMEOUT = 30
+
+# Retry policy for transient SMTP failures (greylisting, throttling,
+# connection resets). Permanent failures (bad recipient, auth) are not retried.
+SMTP_MAX_ATTEMPTS = 3
+SMTP_RETRY_BACKOFF = 2  # seconds, multiplied by attempt number
 
 
 class EmailDeliveryError(Exception):
@@ -160,6 +170,9 @@ class EmailService:
 
         # --- Sender ---
         effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
+        # Strip control characters (CR/LF/etc.) that would break header
+        # serialization or enable header injection.
+        effective_from_name = re.sub(r"[\r\n\t\x00-\x1f\x7f]", " ", effective_from_name).strip()
         if effective_from_name:
             msg["From"] = f"{effective_from_name} <{self.smtp_from_email}>"
         else:
@@ -194,18 +207,71 @@ class EmailService:
     def _send_smtp_sync(self, msg: EmailMessage) -> None:
         if not self.smtp_host:
             raise EmailDeliveryError("SMTP host not configured")
+
+        last_error: Exception | None = None
+        for attempt in range(1, SMTP_MAX_ATTEMPTS + 1):
+            try:
+                self._deliver_once(msg)
+                if attempt > 1:
+                    logger.info(f"SMTP delivery succeeded on attempt {attempt}")
+                return
+            except smtplib.SMTPException as e:
+                # Permanent failures should not be retried – retrying only
+                # wastes time and can trip rate limits.
+                if not self._is_transient_smtp_error(e):
+                    raise EmailDeliveryError(f"SMTP error: {e}") from e
+                last_error = e
+            except OSError as e:
+                # Socket/connection-level errors (timeout, reset) are transient.
+                last_error = e
+
+            if attempt < SMTP_MAX_ATTEMPTS:
+                delay = SMTP_RETRY_BACKOFF * attempt
+                logger.warning(
+                    f"SMTP delivery attempt {attempt} failed ({last_error}); "
+                    f"retrying in {delay}s"
+                )
+                time.sleep(delay)
+
+        raise EmailDeliveryError(
+            f"SMTP error after {SMTP_MAX_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
+
+    def _deliver_once(self, msg: EmailMessage) -> None:
+        """Open a fresh SMTP connection, send the message, and always close it."""
+        if self.smtp_use_tls:
+            server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=SMTP_TIMEOUT)
+        else:
+            server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=SMTP_TIMEOUT)
         try:
             if self.smtp_use_tls:
-                server = smtplib.SMTP(self.smtp_host, self.smtp_port)
                 server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port)
-
             if self.smtp_user and self.smtp_password:
                 server.login(self.smtp_user, self.smtp_password)
-
             # EmailMessage תואם ל-send_message
             server.send_message(msg)
-            server.quit()
-        except Exception as e:
-            raise EmailDeliveryError(f"SMTP error: {e}") from e
+        finally:
+            try:
+                server.quit()
+            except Exception:
+                # quit() can raise if the connection is already broken; the
+                # message was either delivered or will surface as a send error.
+                try:
+                    server.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _is_transient_smtp_error(error: smtplib.SMTPException) -> bool:
+        """Return True for temporary SMTP failures that are worth retrying."""
+        # Connection-level problems are always transient.
+        if isinstance(
+            error,
+            (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, smtplib.SMTPHeloError),
+        ):
+            return True
+        # 4xx response codes are "try again later" (e.g. greylisting, throttling).
+        code = getattr(error, "smtp_code", None)
+        if isinstance(code, int) and 400 <= code < 500:
+            return True
+        return False

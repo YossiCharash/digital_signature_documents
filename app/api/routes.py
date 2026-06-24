@@ -105,6 +105,12 @@ async def sign_and_email(
     if not validate_email(email):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid email address")
 
+    # Validate the business email up-front, before any delivery, so an invalid
+    # value never aborts the request after the client email was already sent.
+    b_email = _sanitize(business_email)
+    if b_email and not validate_email(b_email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid business email address")
+
     try:
         content = await file.read()
     except Exception as e:
@@ -116,7 +122,6 @@ async def sign_and_email(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    b_email = _sanitize(business_email)
     effective_subject = subject or so
 
     # s3_filename uses the raw normalized name; attachment_filename uses business name
@@ -162,11 +167,11 @@ async def sign_and_email(
         )
         logger.info(f"Successfully sent email to client: {email}")
 
+        # The client email was already delivered above. A failure to send the
+        # business copy must NOT fail the whole request (that would make callers
+        # retry and double-send to the client). Report it as a partial status.
+        business_email_status: str | None = None
         if b_email:
-            if not validate_email(b_email):
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, detail="Invalid business email address"
-                )
             logger.info(f"Sending document copy to business email: {b_email}")
             try:
                 await _email_service.send_document(
@@ -178,13 +183,11 @@ async def sign_and_email(
                     from_name=business_name,
                     reply_to=b_email,
                 )
+                business_email_status = "sent"
                 logger.info(f"Successfully sent document copy to business email: {b_email}")
             except EmailDeliveryError as e:
+                business_email_status = "failed"
                 logger.error(f"Failed to send document to business email {b_email}: {e}")
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to send copy to business email: {e}",
-                ) from e
         else:
             logger.warning(
                 "business_email not provided or empty (after sanitize), skipping business email copy"
@@ -216,6 +219,7 @@ async def sign_and_email(
                 "algorithm": signature_data["algorithm"],
             },
             **({"business_recipient": b_email} if b_email else {}),
+            **({"business_email_status": business_email_status} if business_email_status else {}),
         }
 
     except SigningError as e:
