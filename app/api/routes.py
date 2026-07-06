@@ -2,9 +2,10 @@
 import re
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 
 from app.config import settings
+from app.services.delivery_log_service import list_deliveries, record_delivery
 from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
 from app.services.sms_service import SMSDeliveryError, SMSService
@@ -105,6 +106,12 @@ async def sign_and_email(
     if not validate_email(email):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid email address")
 
+    # Validate the business email up-front, before any delivery, so an invalid
+    # value never aborts the request after the client email was already sent.
+    b_email = _sanitize(business_email)
+    if b_email and not validate_email(b_email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid business email address")
+
     try:
         content = await file.read()
     except Exception as e:
@@ -116,7 +123,6 @@ async def sign_and_email(
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    b_email = _sanitize(business_email)
     effective_subject = subject or so
 
     # s3_filename uses the raw normalized name; attachment_filename uses business name
@@ -150,41 +156,78 @@ async def sign_and_email(
         )
         download_url = _storage_service.generate_presigned_url(s3_filename)
 
+        email_subject = effective_subject or f"מסמך חתום: {attachment_filename}"
+
         logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
-        await _email_service.send_document(
-            to_email=email,
-            document=signed_content,
+        try:
+            await _email_service.send_document(
+                to_email=email,
+                document=signed_content,
+                filename=attachment_filename,
+                subject=email_subject,
+                body=email_body,
+                from_name=business_name,
+                reply_to=b_email,
+            )
+        except EmailDeliveryError as e:
+            await record_delivery(
+                channel="email",
+                recipient=email,
+                recipient_type="client",
+                filename=attachment_filename,
+                subject=email_subject,
+                status="failed",
+                error=str(e),
+            )
+            raise
+        await record_delivery(
+            channel="email",
+            recipient=email,
+            recipient_type="client",
             filename=attachment_filename,
-            subject=effective_subject or f"מסמך חתום: {attachment_filename}",
-            body=email_body,
-            from_name=business_name,
-            reply_to=b_email,
+            subject=email_subject,
+            status="sent",
         )
         logger.info(f"Successfully sent email to client: {email}")
 
+        # The client email was already delivered above. A failure to send the
+        # business copy must NOT fail the whole request (that would make callers
+        # retry and double-send to the client). Report it as a partial status.
+        business_email_status: str | None = None
         if b_email:
-            if not validate_email(b_email):
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, detail="Invalid business email address"
-                )
             logger.info(f"Sending document copy to business email: {b_email}")
             try:
                 await _email_service.send_document(
                     to_email=b_email,
                     document=signed_content,
                     filename=attachment_filename,
-                    subject=effective_subject or f"מסמך חתום: {attachment_filename}",
+                    subject=email_subject,
                     body=email_body,
                     from_name=business_name,
                     reply_to=b_email,
                 )
+                business_email_status = "sent"
                 logger.info(f"Successfully sent document copy to business email: {b_email}")
+                await record_delivery(
+                    channel="email",
+                    recipient=b_email,
+                    recipient_type="business",
+                    filename=attachment_filename,
+                    subject=email_subject,
+                    status="sent",
+                )
             except EmailDeliveryError as e:
+                business_email_status = "failed"
                 logger.error(f"Failed to send document to business email {b_email}: {e}")
-                raise HTTPException(
-                    status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to send copy to business email: {e}",
-                ) from e
+                await record_delivery(
+                    channel="email",
+                    recipient=b_email,
+                    recipient_type="business",
+                    filename=attachment_filename,
+                    subject=email_subject,
+                    status="failed",
+                    error=str(e),
+                )
         else:
             logger.warning(
                 "business_email not provided or empty (after sanitize), skipping business email copy"
@@ -216,6 +259,7 @@ async def sign_and_email(
                 "algorithm": signature_data["algorithm"],
             },
             **({"business_recipient": b_email} if b_email else {}),
+            **({"business_email_status": business_email_status} if business_email_status else {}),
         }
 
     except SigningError as e:
@@ -299,11 +343,29 @@ async def sign_and_sms(
             except Exception as exc:
                 logger.warning("URL shortening failed, falling back to original URL: %s", exc)
 
-        await _sms_service.send_document_link(
-            to_phone=phone,
-            document_url=short_url,
-            message=message,
-            business_name=business_name,
+        try:
+            await _sms_service.send_document_link(
+                to_phone=phone,
+                document_url=short_url,
+                message=message,
+                business_name=business_name,
+            )
+        except SMSDeliveryError as e:
+            await record_delivery(
+                channel="sms",
+                recipient=phone,
+                recipient_type="client",
+                filename=pdf_filename,
+                status="failed",
+                error=str(e),
+            )
+            raise
+        await record_delivery(
+            channel="sms",
+            recipient=phone,
+            recipient_type="client",
+            filename=pdf_filename,
+            status="sent",
         )
 
         log_operation(
@@ -372,4 +434,35 @@ async def verify_document_signature(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Verification failed: {e}"
         ) from e
+
+
+@router.get("/deliveries", status_code=status.HTTP_200_OK)
+async def get_deliveries(
+    delivery_status: str | None = Query(
+        None, alias="status", description="Filter by status: 'sent' or 'failed'"
+    ),
+    channel: str | None = Query(None, description="Filter by channel: 'email' or 'sms'"),
+    recipient: str | None = Query(None, description="Filter by exact recipient (email/phone)"),
+    limit: int = Query(100, ge=1, le=1000, description="Max rows to return"),
+) -> dict:
+    """Delivery log: every send attempt with its status and, for failures, the reason."""
+    if delivery_status and delivery_status not in ("sent", "failed"):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail="status must be 'sent' or 'failed'"
+        )
+    if channel and channel not in ("email", "sms"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="channel must be 'email' or 'sms'")
+
+    from app.db import async_session_factory
+
+    if async_session_factory is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Delivery log requires DATABASE_URL to be configured",
+        )
+
+    entries = await list_deliveries(
+        status=delivery_status, channel=channel, recipient=recipient, limit=limit
+    )
+    return {"count": len(entries), "deliveries": entries}
 

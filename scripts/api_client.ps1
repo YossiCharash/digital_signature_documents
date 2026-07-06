@@ -22,8 +22,38 @@ param(
     [string]$business_name  = "",
     [string]$business_email = "",
     [string]$message        = "",
-    [string]$url            = ""
+    [string]$url            = "",
+    [string]$log_file       = ""
 )
+
+# ---------------------------------------------------------------
+# Local log file.
+# Records every attempt on THIS machine so you can always tell what happened,
+# even when the console is gone. The key distinction it captures:
+#   RESPONSE     - the server answered (with any HTTP code); the outcome is known.
+#   NO_RESPONSE  - the script got a network error / timeout and never received an
+#                  answer. The request MAY still have been processed by the server
+#                  (e.g. the email was sent but the acknowledgement was lost).
+# Default location: api_client.log next to this script. Override with -log_file.
+# ---------------------------------------------------------------
+if ($log_file -eq "") {
+    try {
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    } catch {
+        $scriptDir = "."
+    }
+    if (-not $scriptDir) { $scriptDir = "." }
+    $log_file = Join-Path $scriptDir "api_client.log"
+}
+
+function Write-Log($msg) {
+    $ts   = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $line = $ts + " | " + $msg + [Environment]::NewLine
+    # Logging must never break the actual send, so swallow any file error.
+    try {
+        [System.IO.File]::AppendAllText($log_file, $line, [System.Text.Encoding]::UTF8)
+    } catch { }
+}
 
 # ---------------------------------------------------------------
 # Infer command if not provided
@@ -116,6 +146,12 @@ if ($business_name -ne "")  { Write-Host "  business_name  = $business_name" }
 if ($business_email -ne "") { Write-Host "  business_email = $business_email" }
 if ($message -ne "")        { Write-Host "  message        = $message" }
 Write-Host ""
+
+# Record the start of this request in the local log.
+$logRecipient = ""
+if ($email -ne "")     { $logRecipient = "email=" + $email }
+elseif ($phone -ne "") { $logRecipient = "phone=" + $phone }
+Write-Log ("---- REQUEST command=" + $command + " " + $logRecipient + " file=" + $file + " url=" + $url)
 
 # ---------------------------------------------------------------
 # Configure ServicePointManager BEFORE any HTTP call.
@@ -278,12 +314,17 @@ $requestBody = $ms.ToArray()
 $ms.Close()
 
 # ---------------------------------------------------------------
-# Send request — retry up to 3 times on transient network errors
+# Send request — retry on transient failures.
+# A failed attempt (network error, or a 5xx server error such as an SMTP
+# failure) is retried after $retryDelaySec seconds. HTTP 4xx responses are
+# client errors (e.g. bad email address) and are NOT retried — they would
+# just fail again.
 # ---------------------------------------------------------------
-$maxAttempts = 3
-$attempt     = 0
-$statusCode  = 0
-$respBody    = ""
+$maxAttempts   = 3
+$retryDelaySec = 30   # wait half a minute between attempts
+$attempt       = 0
+$statusCode    = 0
+$respBody      = ""
 
 while ($attempt -lt $maxAttempts) {
     $attempt++
@@ -326,11 +367,13 @@ while ($attempt -lt $maxAttempts) {
             $depth++
         }
 
+        Write-Log ("ATTEMPT " + $attempt + ": NO_RESPONSE (send failed): " + $errMsg)
         if ($attempt -lt $maxAttempts) {
-            Write-Host ("[WARN] Attempt " + $attempt + " failed (send): " + $errMsg + " - retrying...")
-            Start-Sleep -Seconds 2
+            Write-Host ("[WARN] Attempt " + $attempt + " failed (send): " + $errMsg + " - retrying in " + $retryDelaySec + "s...")
+            Start-Sleep -Seconds $retryDelaySec
         } else {
             Write-Host ("[ERROR] Failed to send after " + $maxAttempts + " attempts: " + $errMsg)
+            Write-Log ("RESULT: FAILED after " + $maxAttempts + " attempts - request never reached the server (no response). " + $logRecipient)
             Write-Host ""
             Write-Host "Troubleshooting:"
             Write-Host "  1. Disable antivirus / firewall temporarily to rule out blocking."
@@ -352,27 +395,39 @@ while ($attempt -lt $maxAttempts) {
         $reader.Close()
         $resp.Close()
         $recvOk = $true
+        Write-Log ("ATTEMPT " + $attempt + ": RESPONSE HTTP " + $statusCode + " (server processed the request)")
     } catch [System.Net.WebException] {
         $ex = $_.Exception
         if ($ex.Response -ne $null) {
-            # Server replied with HTTP error (4xx / 5xx) — capture body, no retry
+            # Server replied with an HTTP error — capture the body either way.
             $errResp    = [System.Net.HttpWebResponse]$ex.Response
             $statusCode = [int]$errResp.StatusCode
             $reader     = New-Object System.IO.StreamReader($errResp.GetResponseStream())
             $respBody   = $reader.ReadToEnd()
             $reader.Close()
             $errResp.Close()
-            $recvOk = $true
+            Write-Log ("ATTEMPT " + $attempt + ": RESPONSE HTTP " + $statusCode + " (server processed the request)")
+
+            # 5xx = server-side / transient failure (e.g. the email send failed)
+            # -> retry after the delay. 4xx = client error -> accept and stop.
+            if ($statusCode -ge 500 -and $attempt -lt $maxAttempts) {
+                Write-Host ("[WARN] Attempt " + $attempt + " failed (HTTP " + $statusCode + ") - retrying in " + $retryDelaySec + "s...")
+                Start-Sleep -Seconds $retryDelaySec
+            } else {
+                $recvOk = $true
+            }
         } else {
             # Network-level failure — retry if attempts remain
             $errMsg = $ex.Message
             $inner  = $ex.InnerException
             if ($inner -ne $null) { $errMsg = $inner.Message }
+            Write-Log ("ATTEMPT " + $attempt + ": NO_RESPONSE (receive failed): " + $errMsg + " [request MAY already have been processed by the server]")
             if ($attempt -lt $maxAttempts) {
-                Write-Host ("[WARN] Attempt " + $attempt + " failed (receive): " + $errMsg + " - retrying...")
-                Start-Sleep -Seconds 2
+                Write-Host ("[WARN] Attempt " + $attempt + " failed (receive): " + $errMsg + " - retrying in " + $retryDelaySec + "s...")
+                Start-Sleep -Seconds $retryDelaySec
             } else {
                 Write-Host ("[ERROR] Network error after " + $maxAttempts + " attempts: " + $ex.Message)
+                Write-Log ("RESULT: UNKNOWN after " + $maxAttempts + " attempts - no response received; the request MAY have been processed (possible duplicate on retry). " + $logRecipient)
                 if ($ex.InnerException -ne $null) {
                     Write-Host ("       Inner: " + $ex.InnerException.Message)
                 }
@@ -391,15 +446,58 @@ while ($attempt -lt $maxAttempts) {
 
 # ---------------------------------------------------------------
 # Output result
+#
+# The script always waits for the server's HTTP response before printing
+# a verdict, so the exit code reflects whether the send actually succeeded:
+#   exit 0  -> delivery confirmed by the server
+#   exit 1  -> delivery failed (network error already handled above, or the
+#              server rejected/failed the request)
+# On success we also surface a per-recipient summary parsed from the JSON,
+# including a WARNING when the business copy could not be delivered.
 # ---------------------------------------------------------------
-if ($respBody -ne "") { Write-Host $respBody }
+
+# Extract a single JSON string field by name. Returns "" if not present.
+# Regex-based so it works on PowerShell 2.0 (no ConvertFrom-Json there).
+function Get-JsonField($json, $name) {
+    if ($json -match ('"' + $name + '"\s*:\s*"([^"]*)"')) { return $matches[1] }
+    return ""
+}
+
+Write-Host ""
+Write-Host "===== RESULT ====="
+if ($respBody -ne "") {
+    Write-Host "Server response:"
+    Write-Host $respBody
+    Write-Host ""
+}
 
 if ($statusCode -ge 200 -and $statusCode -lt 300) {
-    Write-Host ""
-    Write-Host ("[OK] Success (HTTP " + $statusCode + ")")
+    $delivery  = Get-JsonField $respBody "delivery"
+    $recipient = Get-JsonField $respBody "recipient"
+    if ($delivery -ne "" -and $recipient -ne "") {
+        Write-Host ("[OK] " + $delivery + " delivered to " + $recipient + " (HTTP " + $statusCode + ")")
+    } else {
+        Write-Host ("[OK] Delivery succeeded (HTTP " + $statusCode + ")")
+    }
+    Write-Log ("RESULT: SUCCESS (HTTP " + $statusCode + ") " + $logRecipient)
+
+    # Partial success: the client was served (HTTP 2xx) but the business copy failed.
+    $bizStatus = Get-JsonField $respBody "business_email_status"
+    if ($bizStatus -eq "failed") {
+        $bizRecipient = Get-JsonField $respBody "business_recipient"
+        Write-Host ("[WARN] Business copy to " + $bizRecipient + " was NOT delivered. Check the server delivery log.")
+        Write-Log ("RESULT: PARTIAL - business copy to " + $bizRecipient + " was NOT delivered")
+    }
     exit 0
 } else {
-    Write-Host ""
-    Write-Host ("[ERROR] Server returned HTTP " + $statusCode)
+    # Prefer the precise server-provided reason ("detail") over a bare status.
+    $detail = Get-JsonField $respBody "detail"
+    if ($detail -ne "") {
+        Write-Host ("[ERROR] Delivery FAILED (HTTP " + $statusCode + "): " + $detail)
+        Write-Log ("RESULT: FAILED (HTTP " + $statusCode + "): " + $detail + " " + $logRecipient)
+    } else {
+        Write-Host ("[ERROR] Delivery FAILED (HTTP " + $statusCode + ")")
+        Write-Log ("RESULT: FAILED (HTTP " + $statusCode + ") " + $logRecipient)
+    }
     exit 1
 }

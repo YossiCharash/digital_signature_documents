@@ -6,7 +6,9 @@ import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.config import settings
 from app.services.cleanup_service import CleanupService
+from app.services.delivery_log_service import purge_old_successful_deliveries
 from app.services.storage_service import StorageService
 from app.utils.logger import logger
 
@@ -48,3 +50,12 @@ class SchedulerService:
             logger.info(f"Cleanup job completed: {result}")
         except Exception as e:
             logger.error(f"Error in scheduled cleanup job: {e}", exc_info=True)
+
+        # Purge old successful delivery logs (failures are kept forever).
+        try:
+            deleted = await purge_old_successful_deliveries(
+                settings.delivery_log_success_retention_days
+            )
+            logger.info(f"Delivery log purge completed: {deleted} successful entries removed")
+        except Exception as e:
+            logger.error(f"Error in delivery log purge job: {e}", exc_info=True)
