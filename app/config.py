@@ -23,16 +23,27 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Email
-    email_provider: str = "smtp"
+    email_provider: str = "smtp"  # smtp | ses | api
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_use_tls: bool = True
-    smtp_from_email: str
-    smtp_from_name: str
+    # Sender identity. Has defaults so the app can start without configuration;
+    # for SES this MUST be overridden with a verified SES identity.
+    smtp_from_email: str = "noreply@example.com"
+    smtp_from_name: str = "Document Delivery"
     email_api_url: str | None = None
     email_api_key: str | None = None
+
+    # Amazon SES (used when email_provider="ses"). On AWS (App Runner/ECS/EC2)
+    # leave the keys empty to use the instance IAM role; boto3 resolves
+    # credentials automatically. The From address (smtp_from_email) must be a
+    # verified SES identity in this region.
+    ses_region: str | None = None  # falls back to s3_region, then AWS default
+    ses_access_key: str | None = None
+    ses_secret_key: str | None = None
+    ses_configuration_set: str | None = None  # optional SES configuration set
 
     # SMS
     sms_provider: str = "api"
@@ -89,8 +100,8 @@ class Settings(BaseSettings):
     @field_validator("email_provider")
     @classmethod
     def _email_provider(cls, v: str) -> str:
-        if v.lower() not in ("smtp", "api"):
-            raise ValueError("email_provider must be 'smtp' or 'api'")
+        if v.lower() not in ("smtp", "api", "ses"):
+            raise ValueError("email_provider must be 'smtp', 'ses', or 'api'")
         return v.lower()
 
     def ensure_directories(self) -> None:

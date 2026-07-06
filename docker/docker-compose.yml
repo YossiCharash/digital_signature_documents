@@ -1,6 +1,24 @@
-version: "3.8"
+version: "3.9"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: docu
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docu}
+      POSTGRES_USER: ${POSTGRES_USER:-docu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docu}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docu}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   document-delivery:
     build:
       context: ..
@@ -15,6 +33,9 @@ services:
       - LOG_LEVEL=INFO
       - HOST=0.0.0.0
       - PORT=8000
+      # Reach postgres over the compose network (service name), not localhost.
+      # Overrides any DATABASE_URL in .env for the containerised run.
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-docu}:${POSTGRES_PASSWORD:-docu}@postgres:5432/${POSTGRES_DB:-docu}
     env_file:
       - ../.env
     volumes:
@@ -22,9 +43,16 @@ services:
       - ../uploads:/app/uploads
       - ../temp:/app/temp
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+volumes:
+  pgdata:
+    driver: local
