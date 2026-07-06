@@ -311,8 +311,10 @@ class EmailService:
     def _send_ses_sync(self, msg: EmailMessage, to_email: str) -> None:
         from botocore.exceptions import (
             ClientError,
-            ConnectionError as BotoConnectionError,
             ReadTimeoutError,
+        )
+        from botocore.exceptions import (
+            ConnectionError as BotoConnectionError,
         )
 
         client = self._get_ses_client()
