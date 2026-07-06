@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # Database (optional – required for the internal URL shortener)
     database_url: str | None = None
 
+    # Delivery log retention: successful sends are purged after this many days;
+    # failures are kept forever so they can always be investigated.
+    delivery_log_success_retention_days: int = 2
+
     # Signing
     private_key_pem: str | None = None
     private_key_path: str | None = None

@@ -24,6 +24,7 @@ async def create_tables() -> None:
     """Create all tables that are registered on Base.metadata."""
     if engine is None:
         return
+    from app.models.delivery_log import DeliveryLog  # noqa: F401 – registers model with metadata
     from app.models.short_link import ShortLink  # noqa: F401 – registers model with metadata
 
     async with engine.begin() as conn:
