@@ -151,6 +151,9 @@ class SigningService:
                 x509.ExtendedKeyUsage(
                     [
                         ExtendedKeyUsageOID.EMAIL_PROTECTION,
+                        # CLIENT_AUTH is required by endesive's client verifier so
+                        # that verify_pdf_signature can validate the certificate chain.
+                        ExtendedKeyUsageOID.CLIENT_AUTH,
                     ]
                 ),
                 critical=False,
@@ -311,7 +314,7 @@ class SigningService:
                             dct,
                             self._private_key,
                             self._certificate,
-                            [self._certificate],
+                            [],
                             "sha256",
                             timestampurl=tsa_url_attempt,
                             timestampcredentials=timestampcredentials,
@@ -341,7 +344,7 @@ class SigningService:
                             dct,
                             self._private_key,
                             self._certificate,
-                            [self._certificate],
+                            [],
                             "sha256",
                             timestampurl=None,
                             timestampcredentials=None,
@@ -363,7 +366,7 @@ class SigningService:
                     dct,
                     self._private_key,
                     self._certificate,
-                    [self._certificate],
+                    [],
                     "sha256",
                     timestampurl=None,
                     timestampcredentials=None,
@@ -444,20 +447,44 @@ class SigningService:
         Verify PDF digital signature embedded in the PDF file.
 
         Returns dict with:
-        - valid: bool - True if signature is valid
+        - valid: bool - True if the content signature is valid
         - hash_ok: bool - True if hash matches
         - signature_ok: bool - True if signature is valid
         - cert_ok: bool - True if certificate is valid
+        - signatures: list - per-signature (hash_ok, signature_ok, cert_ok)
         - message: str - Status message
         """
         try:
-            cert_pem = self._certificate.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+            # endesive expects a list of trusted certificates as PEM *bytes*
+            # (it calls load_pem_x509_certificate on each entry).
+            cert_pem_bytes = self._certificate.public_bytes(serialization.Encoding.PEM)
 
-            certificates = (cert_pem, cert_pem)
+            # pdf.verify returns a list of (hash_ok, signature_ok, cert_ok)
+            # tuples - one per signature embedded in the PDF. A PDF signed by
+            # this service contains our CMS content signature and, when TSA is
+            # enabled, an appended RFC3161 DocTimeStamp. endesive cannot fully
+            # validate the DocTimeStamp token (it reports hash/cert failures for
+            # the TSA responder cert), so we key validity off the content
+            # signature: the document is valid when at least one signature
+            # verifies completely (hash + signature + certificate).
+            results = [tuple(bool(x) for x in r) for r in pdf.verify(pdf_content, [cert_pem_bytes])]
 
-            hash_ok, signature_ok, cert_ok = pdf.verify(pdf_content, certificates)
+            if not results:
+                return {
+                    "valid": False,
+                    "hash_ok": False,
+                    "signature_ok": False,
+                    "cert_ok": False,
+                    "signatures": [],
+                    "message": "PDF contains no digital signatures",
+                }
 
-            valid = hash_ok and signature_ok and cert_ok
+            # Pick the strongest signature (most checks passed) as the
+            # representative content signature for the summary fields.
+            primary = max(results, key=lambda r: (r[0], r[1], r[2]))
+            hash_ok, signature_ok, cert_ok = primary
+
+            valid = any(r[0] and r[1] and r[2] for r in results)
 
             if valid:
                 message = "PDF signature is valid and verified"
@@ -476,6 +503,7 @@ class SigningService:
                 "hash_ok": hash_ok,
                 "signature_ok": signature_ok,
                 "cert_ok": cert_ok,
+                "signatures": results,
                 "message": message,
             }
         except Exception as e:
@@ -485,5 +513,6 @@ class SigningService:
                 "hash_ok": False,
                 "signature_ok": False,
                 "cert_ok": False,
+                "signatures": [],
                 "message": f"Verification error: {str(e)}",
             }
