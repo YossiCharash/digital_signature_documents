@@ -54,6 +54,11 @@ services:
       # רק כאשר EMAIL_PROVIDER=sendgrid
       - key: SENDGRID_API_KEY
         sync: false
+      # רק כאשר EMAIL_PROVIDER=mailjet
+      - key: MAILJET_API_KEY
+        sync: false
+      - key: MAILJET_SECRET_KEY
+        sync: false
       - key: S3_BUCKET_NAME
         sync: false
       - key: SMS_API_URL

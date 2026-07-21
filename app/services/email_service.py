@@ -7,8 +7,10 @@ import mimetypes
 import re
 import smtplib
 import time
+from collections.abc import Callable
 from email import policy
 from email.message import EmailMessage
+from typing import Any
 
 from app.config import settings
 from app.utils.logger import logger
@@ -27,10 +29,10 @@ SMTP_RETRY_BACKOFF = 2  # seconds, multiplied by attempt number
 PLACEHOLDER_FROM_EMAIL = "noreply@example.com"
 
 # Providers that require the From address to be a verified sender identity.
-VERIFIED_SENDER_PROVIDERS = ("ses", "sendgrid")
+VERIFIED_SENDER_PROVIDERS = ("ses", "sendgrid", "mailjet")
 
-# HTTP timeout (seconds) for the SendGrid Web API call.
-SENDGRID_TIMEOUT = 30
+# HTTP timeout (seconds) for the JSON-API providers (SendGrid, Mailjet).
+HTTP_API_TIMEOUT = 30
 
 
 class EmailDeliveryError(Exception):
@@ -61,6 +63,10 @@ class EmailService:
         sendgrid_api_key: str | None = None,
         sendgrid_api_url: str | None = None,
         sendgrid_sandbox_mode: bool | None = None,
+        mailjet_api_key: str | None = None,
+        mailjet_secret_key: str | None = None,
+        mailjet_api_url: str | None = None,
+        mailjet_sandbox_mode: bool | None = None,
     ):
         self.provider = provider or settings.email_provider
         self.smtp_host = smtp_host or settings.smtp_host
@@ -99,6 +105,20 @@ class EmailService:
             else settings.sendgrid_sandbox_mode
         )
 
+        # Mailjet Send API v3.1.
+        self.mailjet_api_key = self._clean_secret(
+            mailjet_api_key or settings.mailjet_api_key
+        )
+        self.mailjet_secret_key = self._clean_secret(
+            mailjet_secret_key or settings.mailjet_secret_key
+        )
+        self.mailjet_api_url = (mailjet_api_url or settings.mailjet_api_url or "").strip()
+        self.mailjet_sandbox_mode = (
+            mailjet_sandbox_mode
+            if mailjet_sandbox_mode is not None
+            else settings.mailjet_sandbox_mode
+        )
+
         # Fail-fast heads-up: the placeholder sender is not a verified sender
         # identity, so every send would be rejected. Warn loudly at startup
         # instead of only discovering it on the first failed request.
@@ -129,6 +149,22 @@ class EmailService:
                     "reject it with 401."
                 )
 
+        if self.provider == "mailjet" and not (
+            self.mailjet_api_key and self.mailjet_secret_key
+        ):
+            missing = [
+                name
+                for name, value in (
+                    ("MAILJET_API_KEY", self.mailjet_api_key),
+                    ("MAILJET_SECRET_KEY", self.mailjet_secret_key),
+                )
+                if not value
+            ]
+            logger.warning(
+                f"EMAIL_PROVIDER=mailjet but {' and '.join(missing)} "
+                "is not set; every send will fail."
+            )
+
     async def send_document(
         self,
         to_email: str,
@@ -150,6 +186,10 @@ class EmailService:
                 )
             if self.provider == "sendgrid":
                 return await self._send_document_via_sendgrid(
+                    to_email, document, filename, subject, body, from_name, reply_to
+                )
+            if self.provider == "mailjet":
+                return await self._send_document_via_mailjet(
                     to_email, document, filename, subject, body, from_name, reply_to
                 )
             return await self._send_document_via_smtp(
@@ -428,36 +468,60 @@ class EmailService:
         return payload
 
     async def _send_sendgrid_request(self, payload: dict) -> None:
-        import httpx
-
         headers = {
             "Authorization": f"Bearer {self.sendgrid_api_key}",
             "Content-Type": "application/json",
         }
+        # 202 Accepted is SendGrid's success response, with an empty body.
+        await self._post_json_with_retry(
+            "SendGrid",
+            self.sendgrid_api_url,
+            payload,
+            headers=headers,
+            detail_fn=self._sendgrid_error_detail,
+            hint_fn=self._sendgrid_hint,
+        )
+
+    async def _post_json_with_retry(
+        self,
+        provider: str,
+        url: str,
+        payload: dict,
+        headers: dict | None = None,
+        auth: tuple[str, str] | None = None,
+        detail_fn: "Callable[[Any], str] | None" = None,
+        hint_fn: "Callable[[int], str] | None" = None,
+    ):  # type: ignore[no-untyped-def]
+        """POST JSON to an email provider's API, retrying transient failures.
+
+        Returns the successful response. Shared by every HTTP-API backend; only
+        the error-extraction and hint callbacks differ between providers.
+        """
+        import httpx
 
         last_error: Exception | None = None
-        async with httpx.AsyncClient(timeout=SENDGRID_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=HTTP_API_TIMEOUT) as client:
             for attempt in range(1, SMTP_MAX_ATTEMPTS + 1):
                 try:
                     response = await client.post(
-                        self.sendgrid_api_url, json=payload, headers=headers
+                        url, json=payload, headers=headers, auth=auth
                     )
-                    # 202 Accepted is the success response; anything else 2xx is
-                    # still fine.
                     if response.is_success:
                         if attempt > 1:
                             logger.info(
-                                f"SendGrid delivery succeeded on attempt {attempt}"
+                                f"{provider} delivery succeeded on attempt {attempt}"
                             )
-                        return
+                        return response
 
-                    detail = self._sendgrid_error_detail(response)
+                    detail = (
+                        detail_fn(response) if detail_fn else response.text[:500]
+                    )
                     # 4xx other than 429 means a bad request/key/sender – retrying
                     # would never succeed.
-                    if not self._is_transient_sendgrid_status(response.status_code):
+                    if not self._is_transient_api_status(response.status_code):
+                        hint = hint_fn(response.status_code) if hint_fn else ""
                         raise EmailDeliveryError(
-                            f"SendGrid error {response.status_code}: {detail}"
-                            f"{self._sendgrid_hint(response.status_code)}"
+                            f"{provider} error {response.status_code}: {detail}{hint}"
                         )
                     last_error = Exception(f"HTTP {response.status_code}: {detail}")
                 except httpx.HTTPError as e:
@@ -467,13 +531,13 @@ class EmailService:
                 if attempt < SMTP_MAX_ATTEMPTS:
                     delay = SMTP_RETRY_BACKOFF * attempt
                     logger.warning(
-                        f"SendGrid delivery attempt {attempt} failed ({last_error}); "
+                        f"{provider} delivery attempt {attempt} failed ({last_error}); "
                         f"retrying in {delay}s"
                     )
                     await asyncio.sleep(delay)
 
         raise EmailDeliveryError(
-            f"SendGrid error after {SMTP_MAX_ATTEMPTS} attempts: {last_error}"
+            f"{provider} error after {SMTP_MAX_ATTEMPTS} attempts: {last_error}"
         ) from last_error
 
     def _sendgrid_hint(self, status_code: int) -> str:
@@ -492,8 +556,8 @@ class EmailService:
         return ""
 
     @staticmethod
-    def _is_transient_sendgrid_status(status_code: int) -> bool:
-        """Return True for SendGrid responses worth retrying."""
+    def _is_transient_api_status(status_code: int) -> bool:
+        """Return True for HTTP-API responses worth retrying."""
         return status_code == 429 or status_code >= 500
 
     @staticmethod
@@ -506,6 +570,155 @@ class EmailService:
                 return "; ".join(messages)
         except Exception:
             pass
+        return response.text[:500]
+
+    async def _send_document_via_mailjet(
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
+    ) -> bool:
+        if not self.mailjet_api_key or not self.mailjet_secret_key:
+            raise EmailDeliveryError(
+                "Mailjet needs both MAILJET_API_KEY and MAILJET_SECRET_KEY."
+            )
+
+        from_email = (self.smtp_from_email or "").strip()
+        if not from_email or from_email.lower() == PLACEHOLDER_FROM_EMAIL:
+            raise EmailDeliveryError(
+                "Mailjet requires a verified sender address; set SMTP_FROM_EMAIL "
+                "to an address validated under Account > Sender domains."
+            )
+
+        payload = self._build_mailjet_payload(
+            to_email, document, filename, subject, body, from_name, reply_to
+        )
+        response = await self._post_json_with_retry(
+            "Mailjet",
+            self.mailjet_api_url,
+            payload,
+            headers={"Content-Type": "application/json"},
+            # Mailjet authenticates with HTTP Basic: API key as the user, secret
+            # key as the password.
+            auth=(self.mailjet_api_key, self.mailjet_secret_key),
+            detail_fn=self._mailjet_error_detail,
+            hint_fn=self._mailjet_hint,
+        )
+        # A 200 does not by itself mean the message was accepted: Send API v3.1
+        # reports per-message failures inside the body.
+        self._raise_on_mailjet_message_error(response)
+
+        logger.info(f"Document '{filename}' sent via Mailjet to {to_email}")
+        return True
+
+    def _build_mailjet_payload(
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
+    ) -> dict:
+        """Build the JSON body for Mailjet's Send API v3.1."""
+        email_body = body or f"Please find attached: {filename}."
+
+        sender: dict = {"Email": self.smtp_from_email}
+        effective_from_name = self._effective_from_name(from_name)
+        if effective_from_name:
+            sender["Name"] = effective_from_name
+
+        message: dict = {
+            "From": sender,
+            "To": [{"Email": to_email}],
+            "Subject": subject or f"Document: {filename}",
+            "TextPart": email_body,
+            "HTMLPart": self._body_as_rtl_html(email_body),
+        }
+
+        if reply_to and reply_to.strip():
+            message["ReplyTo"] = {"Email": reply_to.strip()}
+
+        if document:
+            effective_filename = filename or "document.pdf"
+            message["Attachments"] = [
+                {
+                    "ContentType": self._content_type_for(effective_filename),
+                    "Filename": effective_filename,
+                    "Base64Content": base64.b64encode(document).decode("ascii"),
+                }
+            ]
+
+        payload: dict = {"Messages": [message]}
+        if self.mailjet_sandbox_mode:
+            payload["SandboxMode"] = True
+        return payload
+
+    @staticmethod
+    def _raise_on_mailjet_message_error(response) -> None:  # type: ignore[no-untyped-def]
+        """Surface per-message failures that Mailjet reports inside a 200."""
+        try:
+            messages = response.json().get("Messages", [])
+        except Exception:
+            return  # Unparseable body on a 2xx – treat as delivered.
+
+        failures = [m for m in messages if m.get("Status") != "success"]
+        if not failures:
+            return
+
+        details = []
+        for failure in failures:
+            for error in failure.get("Errors", []):
+                text = error.get("ErrorMessage") or error.get("ErrorIdentifier", "")
+                if text:
+                    details.append(text)
+        raise EmailDeliveryError(
+            "Mailjet rejected the message: "
+            + ("; ".join(details) or str(failures)[:500])
+        )
+
+    def _mailjet_hint(self, status_code: int) -> str:
+        """Actionable follow-up for the Mailjet failures that look alike."""
+        if status_code == 401:
+            return (
+                " - MAILJET_API_KEY / MAILJET_SECRET_KEY are wrong or belong to "
+                "different keys. Both come from the same row in API Key "
+                "Management; the secret is shown only when generated."
+            )
+        if status_code == 403:
+            return (
+                f" - the keys are valid but '{self.smtp_from_email}' is not an "
+                "authorised sender under Account > Sender domains & addresses."
+            )
+        return ""
+
+    @staticmethod
+    def _mailjet_error_detail(response) -> str:  # type: ignore[no-untyped-def]
+        """Extract Mailjet's error text, falling back to the raw body."""
+        try:
+            data = response.json()
+        except Exception:
+            return response.text[:500]
+
+        # Top-level failures (auth, malformed request).
+        for key in ("ErrorMessage", "ErrorInfo", "Message"):
+            if data.get(key):
+                return str(data[key])
+
+        # Per-message failures.
+        details = []
+        for message in data.get("Messages", []):
+            for error in message.get("Errors", []):
+                text = error.get("ErrorMessage") or error.get("ErrorIdentifier", "")
+                if text:
+                    details.append(text)
+        if details:
+            return "; ".join(details)
         return response.text[:500]
 
     def _get_ses_client(self):  # type: ignore[no-untyped-def]

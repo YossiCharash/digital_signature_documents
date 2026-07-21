@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Email
-    email_provider: str = "smtp"  # smtp | ses | sendgrid | api
+    email_provider: str = "smtp"  # smtp | ses | sendgrid | mailjet | api
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_user: str | None = None
@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     # When true SendGrid validates the request but never delivers – useful for
     # testing the integration without sending real mail.
     sendgrid_sandbox_mode: bool = False
+
+    # Mailjet (used when email_provider="mailjet"). Both keys come from the same
+    # row in the Mailjet dashboard under Account > API Key Management; they are
+    # sent as HTTP Basic credentials. smtp_from_email must be an authorised
+    # sender under Account > Sender domains & addresses.
+    mailjet_api_key: str | None = None
+    mailjet_secret_key: str | None = None
+    mailjet_api_url: str = "https://api.mailjet.com/v3.1/send"
+    # When true Mailjet validates the request but never delivers.
+    mailjet_sandbox_mode: bool = False
 
     # SMS
     sms_provider: str = "api"
@@ -110,8 +120,10 @@ class Settings(BaseSettings):
     @field_validator("email_provider")
     @classmethod
     def _email_provider(cls, v: str) -> str:
-        if v.lower() not in ("smtp", "api", "ses", "sendgrid"):
-            raise ValueError("email_provider must be 'smtp', 'ses', 'sendgrid', or 'api'")
+        if v.lower() not in ("smtp", "api", "ses", "sendgrid", "mailjet"):
+            raise ValueError(
+                "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', or 'api'"
+            )
         return v.lower()
 
     def ensure_directories(self) -> None:
