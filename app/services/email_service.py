@@ -667,6 +667,12 @@ class EmailService:
             "Subject": subject or f"Document: {filename}",
             "TextPart": email_body,
             "HTMLPart": self._body_as_rtl_html(email_body),
+            # These are one-to-one transactional documents, not campaigns.
+            # Open tracking injects a remote pixel and click tracking rewrites
+            # links through Mailjet's domain – both are spam signals here, and
+            # the stats are of no use for a single addressed document.
+            "TrackOpens": "disabled",
+            "TrackClicks": "disabled",
         }
 
         if reply_to and reply_to.strip():
