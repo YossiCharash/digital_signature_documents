@@ -96,7 +96,11 @@ if ($command -eq "") {
 # Build URL  (use string concatenation - avoids PS 2.0 interpolation quirks)
 # ---------------------------------------------------------------
 if ($host_url -eq "") { $host_url = "http://localhost:8000" }
-$host_url = $host_url.TrimEnd("/")
+# Trim whitespace BEFORE the slashes: a value that ends with a newline (easy to
+# introduce by pasting a URL) would otherwise survive TrimEnd("/") and end up
+# percent-encoded inside the path as /%0A/api/... , which the server 404s.
+$host_url = $host_url.Trim().TrimEnd("/").Trim()
+$url = $url.Trim()
 
 if ($url -eq "") {
     if      ($command -eq "send-email")     { $url = $host_url + "/api/v1/documents/send-email" }
