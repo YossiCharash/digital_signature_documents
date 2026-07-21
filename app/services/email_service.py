@@ -612,8 +612,36 @@ class EmailService:
         # reports per-message failures inside the body.
         self._raise_on_mailjet_message_error(response)
 
-        logger.info(f"Document '{filename}' sent via Mailjet to {to_email}")
+        if self.mailjet_sandbox_mode:
+            # Sandbox responses look exactly like successful ones, so say plainly
+            # that nothing was delivered.
+            logger.warning(
+                f"MAILJET_SANDBOX_MODE is on: '{filename}' was validated for "
+                f"{to_email} but NOT delivered. Set MAILJET_SANDBOX_MODE=false "
+                "to send for real."
+            )
+            return True
+
+        # The MessageID is the handle for tracing the message in Mailjet's
+        # dashboard when the recipient reports it never arrived.
+        message_id = self._mailjet_message_id(response)
+        suffix = f" (Mailjet MessageID {message_id})" if message_id else ""
+        logger.info(f"Document '{filename}' sent via Mailjet to {to_email}{suffix}")
         return True
+
+    @staticmethod
+    def _mailjet_message_id(response) -> str:  # type: ignore[no-untyped-def]
+        """Pull the queued message's identifier out of a Mailjet 200 response."""
+        try:
+            messages = response.json().get("Messages", [])
+            for message in messages:
+                for target in message.get("To", []):
+                    identifier = target.get("MessageID") or target.get("MessageUUID")
+                    if identifier:
+                        return str(identifier)
+        except Exception:
+            pass
+        return ""
 
     def _build_mailjet_payload(
         self,
