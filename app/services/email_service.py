@@ -36,27 +36,25 @@ HTTP_API_TIMEOUT = 30
 
 # Palette for the HTML email template. Kept here (rather than in a stylesheet)
 # because mail clients strip <style> blocks – every rule has to be inlined.
-BRAND_COLOR = "#4f46e5"  # indigo, the solid fallback for the gradient header
-BRAND_COLOR_END = "#9333ea"  # purple, the far end of the header gradient
-PAGE_BACKGROUND = "#f1f3f9"
+BRAND_COLOR = "#1f3864"  # deep navy: a business-correspondence header, flat
+PAGE_BACKGROUND = "#f4f5f7"
 CARD_BACKGROUND = "#ffffff"
+CARD_BORDER = "#dfe3e8"
 TEXT_COLOR = "#1f2430"
 MUTED_TEXT_COLOR = "#6b7280"
-ACCENT_BACKGROUND = "#eef2ff"
-ACCENT_BORDER = "#c7d2fe"
-# The no-reply notice gets its own amber palette so it reads as a notice
-# rather than as more footer boilerplate.
-NOTICE_BACKGROUND = "#fff7ed"
-NOTICE_BORDER = "#fdba74"
-NOTICE_TEXT = "#9a3412"
+ACCENT_BACKGROUND = "#f7f8fa"
+ACCENT_BORDER = "#dfe3e8"
+# The no-reply notice is set apart by weight and a border rather than by
+# colour: an alarm-coloured panel is louder than a document notice warrants.
+NOTICE_BACKGROUND = "#f7f8fa"
+NOTICE_BORDER = "#c9ced6"
+NOTICE_TEXT = "#33383f"
 
 # Closing notice: these documents are sent from an unattended mailbox.
 NO_REPLY_NOTICE = "הודעה זו נשלחה באופן אוטומטי – נא לא להשיב למייל זה."
 
-# Header title used when the caller sends no business name, and the tagline
-# under it. Both are LTR English inside an otherwise RTL document.
+# Header title used when the caller sends no business name.
 DEFAULT_EMAIL_TITLE = "Nohalim"
-EMAIL_SUBTITLE = "Digitally signed document"
 
 
 class EmailDeliveryError(Exception):
@@ -243,9 +241,9 @@ class EmailService:
         """Render the body as a branded, RTL, mobile-friendly HTML email.
 
         Built from nested tables with fully inlined styles: mail clients (Outlook
-        in particular) ignore <style> blocks, flexbox and modern CSS. The header
-        carries a gradient with a solid `bgcolor` underneath so clients that drop
-        the gradient still get the brand colour rather than white.
+        in particular) ignore <style> blocks, flexbox and modern CSS. The styling
+        is deliberately plain – a flat navy header, hairline rules, no gradients
+        or icons – so it reads as business correspondence rather than marketing.
         """
         paragraphs = [
             block.strip() for block in body.strip().split("\n\n") if block.strip()
@@ -266,11 +264,12 @@ class EmailService:
             attachment_html = f"""
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
                      style="background-color:{ACCENT_BACKGROUND};border:1px solid {ACCENT_BORDER};
-                            border-radius:10px;margin:8px 0 4px 0;">
+                            border-radius:4px;margin:8px 0 4px 0;">
                 <tr>
-                  <td style="padding:14px 18px;font-size:15px;color:{TEXT_COLOR};" dir="rtl">
-                    <span style="font-size:18px;">&#128206;</span>&nbsp;
-                    <strong>מצורף למייל:</strong>&nbsp;{html.escape(filename)}
+                  <td style="padding:13px 16px;font-size:14px;line-height:1.6;
+                             color:{TEXT_COLOR};" dir="rtl">
+                    <span style="color:{MUTED_TEXT_COLOR};">מצורף למייל:</span>
+                    <strong>{html.escape(filename)}</strong>
                   </td>
                 </tr>
               </table>"""
@@ -289,16 +288,12 @@ class EmailService:
     <td align="center">
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
              style="width:100%;max-width:600px;background-color:{CARD_BACKGROUND};
-                    border-radius:14px;overflow:hidden;
+                    border:1px solid {CARD_BORDER};border-radius:6px;overflow:hidden;
                     font-family:'Segoe UI',Arial,Helvetica,sans-serif;">
         <tr>
-          <td bgcolor="{BRAND_COLOR}" align="center"
-              style="background-color:{BRAND_COLOR};
-                     background-image:linear-gradient(135deg,{BRAND_COLOR} 0%,{BRAND_COLOR_END} 100%);
-                     padding:30px 24px;">
-            <div style="font-size:30px;line-height:1;">&#9989;</div>
-            <div style="margin-top:10px;font-size:22px;font-weight:bold;color:#ffffff;">{title}</div>
-            <div style="margin-top:6px;font-size:14px;color:#e5e0ff;" dir="ltr">{EMAIL_SUBTITLE}</div>
+          <td bgcolor="{BRAND_COLOR}" align="right"
+              style="background-color:{BRAND_COLOR};padding:20px 28px;" dir="rtl">
+            <div style="font-size:19px;font-weight:bold;color:#ffffff;">{title}</div>
           </td>
         </tr>
         <tr>
@@ -313,13 +308,13 @@ class EmailService:
         <tr>
           <td style="padding:22px 28px 26px 28px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-                   style="background-color:{NOTICE_BACKGROUND};border:2px solid {NOTICE_BORDER};
-                          border-radius:10px;">
+                   style="background-color:{NOTICE_BACKGROUND};border:1px solid {NOTICE_BORDER};
+                          border-radius:4px;">
               <tr>
-                <td align="center"
-                    style="padding:16px 18px;font-size:15px;font-weight:bold;line-height:1.6;
-                           color:{NOTICE_TEXT};">
-                  <span style="font-size:17px;">&#9888;</span>&nbsp;{html.escape(NO_REPLY_NOTICE)}
+                <td align="center" dir="rtl"
+                    style="padding:14px 18px;font-size:14px;font-weight:bold;line-height:1.6;
+                           color:{NOTICE_TEXT};letter-spacing:0.2px;">
+                  {html.escape(NO_REPLY_NOTICE)}
                 </td>
               </tr>
             </table>
