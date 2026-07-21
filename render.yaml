@@ -1,0 +1,64 @@
+# Render Blueprint – Document Delivery API
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    runtime: docker
+    name: document-delivery
+
+    dockerfilePath: docker/Dockerfile
+    dockerContext: .
+
+    # Must bind 0.0.0.0 and Render's injected $PORT, otherwise Render cannot
+    # detect an open port and the deploy hangs on "No open ports detected".
+    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: APP_NAME
+        value: Document Delivery
+      - key: APP_VERSION
+        value: "1.0.0"
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: EMAIL_PROVIDER
+        value: smtp
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USE_TLS
+        value: "true"
+      - key: SMS_PROVIDER
+        value: api
+      - key: S3_ENABLED
+        value: "true"
+      - key: S3_REGION
+        value: us-east-1
+      - key: S3_PRESIGNED_URL_EXPIRATION
+        value: "3600"
+      - key: S3_CLEANUP_RETENTION_DAYS
+        value: "7"
+      # סודיים – יוגדרו ב-Dashboard (sync: false = יבקשו בהפעלה הראשונה)
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      # רק כאשר EMAIL_PROVIDER=sendgrid
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: SMS_API_URL
+        sync: false
+      - key: SMS_API_KEY
+        sync: false
+      - key: SMS_SENDER_NAME
+        sync: false

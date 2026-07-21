@@ -1,6 +1,7 @@
 """Email delivery service – sends documents as attachments (SMTP or API)."""
 
 import asyncio
+import base64
 import html
 import mimetypes
 import re
@@ -22,8 +23,14 @@ SMTP_MAX_ATTEMPTS = 3
 SMTP_RETRY_BACKOFF = 2  # seconds, multiplied by attempt number
 
 # Placeholder sender that ships as the default. Sending from it will be rejected
-# by SES (unverified identity), so we warn when it is left unchanged.
+# by SES/SendGrid (unverified identity), so we warn when it is left unchanged.
 PLACEHOLDER_FROM_EMAIL = "noreply@example.com"
+
+# Providers that require the From address to be a verified sender identity.
+VERIFIED_SENDER_PROVIDERS = ("ses", "sendgrid")
+
+# HTTP timeout (seconds) for the SendGrid Web API call.
+SENDGRID_TIMEOUT = 30
 
 
 class EmailDeliveryError(Exception):
@@ -51,6 +58,9 @@ class EmailService:
         ses_access_key: str | None = None,
         ses_secret_key: str | None = None,
         ses_configuration_set: str | None = None,
+        sendgrid_api_key: str | None = None,
+        sendgrid_api_url: str | None = None,
+        sendgrid_sandbox_mode: bool | None = None,
     ):
         self.provider = provider or settings.email_provider
         self.smtp_host = smtp_host or settings.smtp_host
@@ -78,17 +88,33 @@ class EmailService:
         self.ses_configuration_set = ses_configuration_set or settings.ses_configuration_set
         self._ses_client = None  # lazily created on first send
 
-        # Fail-fast heads-up: the placeholder sender is not a verified SES
-        # identity, so every SES send would be rejected. Warn loudly at startup
+        # SendGrid Web API v3.
+        self.sendgrid_api_key = sendgrid_api_key or settings.sendgrid_api_key
+        self.sendgrid_api_url = sendgrid_api_url or settings.sendgrid_api_url
+        self.sendgrid_sandbox_mode = (
+            sendgrid_sandbox_mode
+            if sendgrid_sandbox_mode is not None
+            else settings.sendgrid_sandbox_mode
+        )
+
+        # Fail-fast heads-up: the placeholder sender is not a verified sender
+        # identity, so every send would be rejected. Warn loudly at startup
         # instead of only discovering it on the first failed request.
-        if self.provider == "ses" and (
+        if self.provider in VERIFIED_SENDER_PROVIDERS and (
             not self.smtp_from_email
             or self.smtp_from_email.strip().lower() == PLACEHOLDER_FROM_EMAIL
         ):
             logger.warning(
-                "EMAIL_PROVIDER=ses but SMTP_FROM_EMAIL is unset or still the "
-                f"placeholder '{PLACEHOLDER_FROM_EMAIL}'. SES will reject every "
-                "send until this is a verified SES identity."
+                f"EMAIL_PROVIDER={self.provider} but SMTP_FROM_EMAIL is unset or "
+                f"still the placeholder '{PLACEHOLDER_FROM_EMAIL}'. "
+                f"{self.provider} will reject every send until this is a "
+                "verified sender identity."
+            )
+
+        if self.provider == "sendgrid" and not self.sendgrid_api_key:
+            logger.warning(
+                "EMAIL_PROVIDER=sendgrid but SENDGRID_API_KEY is not set; "
+                "every send will fail."
             )
 
     async def send_document(
@@ -108,6 +134,10 @@ class EmailService:
             )
             if self.provider == "ses":
                 return await self._send_document_via_ses(
+                    to_email, document, filename, subject, body, from_name, reply_to
+                )
+            if self.provider == "sendgrid":
+                return await self._send_document_via_sendgrid(
                     to_email, document, filename, subject, body, from_name, reply_to
                 )
             return await self._send_document_via_smtp(
@@ -194,6 +224,15 @@ class EmailService:
         encoded_filename = str(Header(filename, "utf-8"))
         return f'attachment; filename="{encoded_filename}"'
 
+    def _effective_from_name(self, from_name: str | None) -> str:
+        """Per-request sender name, falling back to the configured default.
+
+        Control characters (CR/LF/etc.) are stripped: they would break header
+        serialization and enable header injection.
+        """
+        name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
+        return re.sub(r"[\r\n\t\x00-\x1f\x7f]", " ", name).strip()
+
     def _build_message(
         self,
         to_email: str,
@@ -209,10 +248,7 @@ class EmailService:
         msg = EmailMessage(policy=policy.SMTP)
 
         # --- Sender ---
-        effective_from_name = (from_name or "").strip() or (self.smtp_from_name or "").strip()
-        # Strip control characters (CR/LF/etc.) that would break header
-        # serialization or enable header injection.
-        effective_from_name = re.sub(r"[\r\n\t\x00-\x1f\x7f]", " ", effective_from_name).strip()
+        effective_from_name = self._effective_from_name(from_name)
         if effective_from_name:
             msg["From"] = f"{effective_from_name} <{self.smtp_from_email}>"
         else:
@@ -288,6 +324,146 @@ class EmailService:
         await loop.run_in_executor(None, self._send_ses_sync, msg, to_email)
         logger.info(f"Document '{filename}' sent via SES to {to_email}")
         return True
+
+    async def _send_document_via_sendgrid(
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
+    ) -> bool:
+        if not self.sendgrid_api_key:
+            raise EmailDeliveryError("SENDGRID_API_KEY is not configured.")
+
+        from_email = (self.smtp_from_email or "").strip()
+        if not from_email or from_email.lower() == PLACEHOLDER_FROM_EMAIL:
+            raise EmailDeliveryError(
+                "SendGrid requires a verified sender address; set SMTP_FROM_EMAIL "
+                "to a verified SendGrid sender identity."
+            )
+
+        payload = self._build_sendgrid_payload(
+            to_email, document, filename, subject, body, from_name, reply_to
+        )
+        await self._send_sendgrid_request(payload)
+        logger.info(f"Document '{filename}' sent via SendGrid to {to_email}")
+        return True
+
+    def _build_sendgrid_payload(
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
+    ) -> dict:
+        """Build the JSON body for SendGrid's v3 mail/send endpoint."""
+        email_body = body or f"Please find attached: {filename}."
+
+        sender: dict = {"email": self.smtp_from_email}
+        effective_from_name = self._effective_from_name(from_name)
+        if effective_from_name:
+            sender["name"] = effective_from_name
+
+        payload: dict = {
+            "personalizations": [{"to": [{"email": to_email}]}],
+            "from": sender,
+            "subject": subject or f"Document: {filename}",
+            # Order matters to SendGrid: plain text first, HTML last.
+            "content": [
+                {"type": "text/plain", "value": email_body},
+                {"type": "text/html", "value": self._body_as_rtl_html(email_body)},
+            ],
+        }
+
+        if reply_to and reply_to.strip():
+            payload["reply_to"] = {"email": reply_to.strip()}
+
+        if document:
+            effective_filename = filename or "document.pdf"
+            payload["attachments"] = [
+                {
+                    "content": base64.b64encode(document).decode("ascii"),
+                    "filename": effective_filename,
+                    "type": self._content_type_for(effective_filename),
+                    "disposition": "attachment",
+                }
+            ]
+
+        if self.sendgrid_sandbox_mode:
+            payload["mail_settings"] = {"sandbox_mode": {"enable": True}}
+
+        return payload
+
+    async def _send_sendgrid_request(self, payload: dict) -> None:
+        import httpx
+
+        headers = {
+            "Authorization": f"Bearer {self.sendgrid_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        last_error: Exception | None = None
+        async with httpx.AsyncClient(timeout=SENDGRID_TIMEOUT) as client:
+            for attempt in range(1, SMTP_MAX_ATTEMPTS + 1):
+                try:
+                    response = await client.post(
+                        self.sendgrid_api_url, json=payload, headers=headers
+                    )
+                    # 202 Accepted is the success response; anything else 2xx is
+                    # still fine.
+                    if response.is_success:
+                        if attempt > 1:
+                            logger.info(
+                                f"SendGrid delivery succeeded on attempt {attempt}"
+                            )
+                        return
+
+                    detail = self._sendgrid_error_detail(response)
+                    # 4xx other than 429 means a bad request/key/sender – retrying
+                    # would never succeed.
+                    if not self._is_transient_sendgrid_status(response.status_code):
+                        raise EmailDeliveryError(
+                            f"SendGrid error {response.status_code}: {detail}"
+                        )
+                    last_error = Exception(f"HTTP {response.status_code}: {detail}")
+                except httpx.HTTPError as e:
+                    # Network/timeout errors are transient.
+                    last_error = e
+
+                if attempt < SMTP_MAX_ATTEMPTS:
+                    delay = SMTP_RETRY_BACKOFF * attempt
+                    logger.warning(
+                        f"SendGrid delivery attempt {attempt} failed ({last_error}); "
+                        f"retrying in {delay}s"
+                    )
+                    await asyncio.sleep(delay)
+
+        raise EmailDeliveryError(
+            f"SendGrid error after {SMTP_MAX_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
+
+    @staticmethod
+    def _is_transient_sendgrid_status(status_code: int) -> bool:
+        """Return True for SendGrid responses worth retrying."""
+        return status_code == 429 or status_code >= 500
+
+    @staticmethod
+    def _sendgrid_error_detail(response) -> str:  # type: ignore[no-untyped-def]
+        """Extract SendGrid's error messages, falling back to the raw body."""
+        try:
+            errors = response.json().get("errors", [])
+            messages = [e.get("message", "") for e in errors if e.get("message")]
+            if messages:
+                return "; ".join(messages)
+        except Exception:
+            pass
+        return response.text[:500]
 
     def _get_ses_client(self):  # type: ignore[no-untyped-def]
         """Lazily create (and cache) the boto3 SES client."""

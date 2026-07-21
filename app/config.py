@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Email
-    email_provider: str = "smtp"  # smtp | ses | api
+    email_provider: str = "smtp"  # smtp | ses | sendgrid | api
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_user: str | None = None
@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     ses_access_key: str | None = None
     ses_secret_key: str | None = None
     ses_configuration_set: str | None = None  # optional SES configuration set
+
+    # SendGrid (used when email_provider="sendgrid"). Delivery goes over the
+    # Web API v3 (HTTPS) rather than SMTP, so it also works on hosts that block
+    # outbound SMTP ports. smtp_from_email must be a verified SendGrid sender
+    # (Single Sender or an address on an authenticated domain).
+    sendgrid_api_key: str | None = None
+    sendgrid_api_url: str = "https://api.sendgrid.com/v3/mail/send"
+    # When true SendGrid validates the request but never delivers – useful for
+    # testing the integration without sending real mail.
+    sendgrid_sandbox_mode: bool = False
 
     # SMS
     sms_provider: str = "api"
@@ -100,8 +110,8 @@ class Settings(BaseSettings):
     @field_validator("email_provider")
     @classmethod
     def _email_provider(cls, v: str) -> str:
-        if v.lower() not in ("smtp", "api", "ses"):
-            raise ValueError("email_provider must be 'smtp', 'ses', or 'api'")
+        if v.lower() not in ("smtp", "api", "ses", "sendgrid"):
+            raise ValueError("email_provider must be 'smtp', 'ses', 'sendgrid', or 'api'")
         return v.lower()
 
     def ensure_directories(self) -> None:
