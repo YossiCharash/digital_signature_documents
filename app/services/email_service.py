@@ -89,8 +89,10 @@ class EmailService:
         self._ses_client = None  # lazily created on first send
 
         # SendGrid Web API v3.
-        self.sendgrid_api_key = sendgrid_api_key or settings.sendgrid_api_key
-        self.sendgrid_api_url = sendgrid_api_url or settings.sendgrid_api_url
+        self.sendgrid_api_key = self._clean_secret(
+            sendgrid_api_key or settings.sendgrid_api_key
+        )
+        self.sendgrid_api_url = (sendgrid_api_url or settings.sendgrid_api_url or "").strip()
         self.sendgrid_sandbox_mode = (
             sendgrid_sandbox_mode
             if sendgrid_sandbox_mode is not None
@@ -111,11 +113,21 @@ class EmailService:
                 "verified sender identity."
             )
 
-        if self.provider == "sendgrid" and not self.sendgrid_api_key:
-            logger.warning(
-                "EMAIL_PROVIDER=sendgrid but SENDGRID_API_KEY is not set; "
-                "every send will fail."
-            )
+        if self.provider == "sendgrid":
+            if not self.sendgrid_api_key:
+                logger.warning(
+                    "EMAIL_PROVIDER=sendgrid but SENDGRID_API_KEY is not set; "
+                    "every send will fail."
+                )
+            elif not self.sendgrid_api_key.startswith("SG."):
+                # Real keys are always "SG.<id>.<secret>". Anything else is
+                # usually the API key *ID* from the dashboard list, or a
+                # truncated paste – both fail at send time with a 401.
+                logger.warning(
+                    "SENDGRID_API_KEY does not start with 'SG.'; this looks like "
+                    "the API key ID rather than the key itself. SendGrid will "
+                    "reject it with 401."
+                )
 
     async def send_document(
         self,
@@ -223,6 +235,21 @@ class EmailService:
 
         encoded_filename = str(Header(filename, "utf-8"))
         return f'attachment; filename="{encoded_filename}"'
+
+    @staticmethod
+    def _clean_secret(value: str | None) -> str | None:
+        """Normalize a secret pasted into an env var / dashboard field.
+
+        Strips surrounding whitespace (a trailing newline would make the
+        Authorization header illegal) and matching quotes, which some hosting
+        dashboards keep as part of the value.
+        """
+        if not value:
+            return None
+        cleaned = value.strip()
+        if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in "\"'":
+            cleaned = cleaned[1:-1].strip()
+        return cleaned or None
 
     def _effective_from_name(self, from_name: str | None) -> str:
         """Per-request sender name, falling back to the configured default.
@@ -430,6 +457,7 @@ class EmailService:
                     if not self._is_transient_sendgrid_status(response.status_code):
                         raise EmailDeliveryError(
                             f"SendGrid error {response.status_code}: {detail}"
+                            f"{self._sendgrid_hint(response.status_code)}"
                         )
                     last_error = Exception(f"HTTP {response.status_code}: {detail}")
                 except httpx.HTTPError as e:
@@ -447,6 +475,21 @@ class EmailService:
         raise EmailDeliveryError(
             f"SendGrid error after {SMTP_MAX_ATTEMPTS} attempts: {last_error}"
         ) from last_error
+
+    def _sendgrid_hint(self, status_code: int) -> str:
+        """Actionable follow-up for the SendGrid failures that look alike."""
+        if status_code == 401:
+            return (
+                " - SENDGRID_API_KEY is invalid, revoked, or from another account. "
+                "Verify it with: curl -i https://api.sendgrid.com/v3/scopes "
+                "-H 'Authorization: Bearer <key>'"
+            )
+        if status_code == 403:
+            return (
+                " - the API key is valid but lacks 'Mail Send' permission, or "
+                f"'{self.smtp_from_email}' is not a verified SendGrid sender."
+            )
+        return ""
 
     @staticmethod
     def _is_transient_sendgrid_status(status_code: int) -> bool:
