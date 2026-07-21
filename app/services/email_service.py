@@ -34,6 +34,25 @@ VERIFIED_SENDER_PROVIDERS = ("ses", "sendgrid", "mailjet")
 # HTTP timeout (seconds) for the JSON-API providers (SendGrid, Mailjet).
 HTTP_API_TIMEOUT = 30
 
+# Palette for the HTML email template. Kept here (rather than in a stylesheet)
+# because mail clients strip <style> blocks – every rule has to be inlined.
+BRAND_COLOR = "#4f46e5"  # indigo, the solid fallback for the gradient header
+BRAND_COLOR_END = "#9333ea"  # purple, the far end of the header gradient
+PAGE_BACKGROUND = "#f1f3f9"
+CARD_BACKGROUND = "#ffffff"
+TEXT_COLOR = "#1f2430"
+MUTED_TEXT_COLOR = "#6b7280"
+ACCENT_BACKGROUND = "#eef2ff"
+ACCENT_BORDER = "#c7d2fe"
+
+# Closing notice: these documents are sent from an unattended mailbox.
+NO_REPLY_NOTICE = "הודעה זו נשלחה באופן אוטומטי – נא לא להשיב למייל זה."
+
+# Header title used when the caller sends no business name, and the tagline
+# under it. Both are LTR English inside an otherwise RTL document.
+DEFAULT_EMAIL_TITLE = "Nohalim"
+EMAIL_SUBTITLE = "Digitally signed document"
+
 
 class EmailDeliveryError(Exception):
     """Raised when email delivery fails."""
@@ -206,16 +225,100 @@ class EmailService:
         return ct or "application/octet-stream"
 
     @staticmethod
-    def _body_as_rtl_html(body: str) -> str:
-        """Wrap plain body in HTML with dir=rtl and lang=he for RTL display."""
-        escaped = html.escape(body)
-        with_br = escaped.replace("\n", "<br>\n")
-        return (
-            '<!DOCTYPE html>\n<html dir="rtl" lang="he">\n<head>\n'
-            '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width">\n'
-            '</head>\n<body style="font-family: Arial, sans-serif;">\n'
-            f'<div dir="rtl">{with_br}</div>\n</body>\n</html>'
+    def _body_as_plain_text(body: str) -> str:
+        """Plain-text alternative, carrying the same no-reply notice as the HTML."""
+        return f"{body.rstrip()}\n\n---\n{NO_REPLY_NOTICE}"
+
+    @staticmethod
+    def _body_as_rtl_html(
+        body: str,
+        sender_name: str | None = None,
+        filename: str | None = None,
+    ) -> str:
+        """Render the body as a branded, RTL, mobile-friendly HTML email.
+
+        Built from nested tables with fully inlined styles: mail clients (Outlook
+        in particular) ignore <style> blocks, flexbox and modern CSS. The header
+        carries a gradient with a solid `bgcolor` underneath so clients that drop
+        the gradient still get the brand colour rather than white.
+        """
+        paragraphs = [
+            block.strip() for block in body.strip().split("\n\n") if block.strip()
+        ]
+        body_html = "\n".join(
+            '<p style="margin:0 0 16px 0;font-size:16px;line-height:1.7;'
+            f'color:{TEXT_COLOR};">'
+            + html.escape(block).replace("\n", "<br>")
+            + "</p>"
+            for block in paragraphs
         )
+
+        name = (sender_name or "").strip()
+        title = html.escape(name) if name else DEFAULT_EMAIL_TITLE
+
+        attachment_html = ""
+        if filename:
+            attachment_html = f"""
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                     style="background-color:{ACCENT_BACKGROUND};border:1px solid {ACCENT_BORDER};
+                            border-radius:10px;margin:8px 0 4px 0;">
+                <tr>
+                  <td style="padding:14px 18px;font-size:15px;color:{TEXT_COLOR};" dir="rtl">
+                    <span style="font-size:18px;">&#128206;</span>&nbsp;
+                    <strong>מצורף למייל:</strong>&nbsp;{html.escape(filename)}
+                  </td>
+                </tr>
+              </table>"""
+
+        return f"""<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+</head>
+<body style="margin:0;padding:0;background-color:{PAGE_BACKGROUND};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+       style="background-color:{PAGE_BACKGROUND};padding:24px 12px;" dir="rtl">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"
+             style="width:100%;max-width:600px;background-color:{CARD_BACKGROUND};
+                    border-radius:14px;overflow:hidden;
+                    font-family:'Segoe UI',Arial,Helvetica,sans-serif;">
+        <tr>
+          <td bgcolor="{BRAND_COLOR}" align="center"
+              style="background-color:{BRAND_COLOR};
+                     background-image:linear-gradient(135deg,{BRAND_COLOR} 0%,{BRAND_COLOR_END} 100%);
+                     padding:30px 24px;">
+            <div style="font-size:30px;line-height:1;">&#9989;</div>
+            <div style="margin-top:10px;font-size:22px;font-weight:bold;color:#ffffff;">{title}</div>
+            <div style="margin-top:6px;font-size:14px;color:#e5e0ff;" dir="ltr">{EMAIL_SUBTITLE}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:28px 28px 8px 28px;" dir="rtl" align="right">
+            {body_html}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 28px;">{attachment_html}
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:24px 28px 26px 28px;">
+            <div style="border-top:1px solid #e5e7eb;padding-top:16px;font-size:13px;
+                        line-height:1.6;color:{MUTED_TEXT_COLOR};text-align:center;">
+              {html.escape(NO_REPLY_NOTICE)}
+            </div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>"""
 
     @staticmethod
     def _ascii_fallback_filename(filename: str) -> str:
@@ -328,8 +431,12 @@ class EmailService:
 
         # --- Body ---
         email_body = body or f"Please find attached: {filename}."
-        msg.set_content(email_body)  # Plain text version
-        msg.add_alternative(self._body_as_rtl_html(email_body), subtype="html")  # HTML RTL version
+        attached_name = (filename or "document.pdf") if document else None
+        msg.set_content(self._body_as_plain_text(email_body))  # Plain text version
+        msg.add_alternative(  # HTML RTL version
+            self._body_as_rtl_html(email_body, effective_from_name, attached_name),
+            subtype="html",
+        )
 
         # --- Attachment ---
         if document:
@@ -437,14 +544,20 @@ class EmailService:
         if effective_from_name:
             sender["name"] = effective_from_name
 
+        attached_name = (filename or "document.pdf") if document else None
         payload: dict = {
             "personalizations": [{"to": [{"email": to_email}]}],
             "from": sender,
             "subject": subject or f"Document: {filename}",
             # Order matters to SendGrid: plain text first, HTML last.
             "content": [
-                {"type": "text/plain", "value": email_body},
-                {"type": "text/html", "value": self._body_as_rtl_html(email_body)},
+                {"type": "text/plain", "value": self._body_as_plain_text(email_body)},
+                {
+                    "type": "text/html",
+                    "value": self._body_as_rtl_html(
+                        email_body, effective_from_name, attached_name
+                    ),
+                },
             ],
         }
 
@@ -661,12 +774,15 @@ class EmailService:
         if effective_from_name:
             sender["Name"] = effective_from_name
 
+        attached_name = (filename or "document.pdf") if document else None
         message: dict = {
             "From": sender,
             "To": [{"Email": to_email}],
             "Subject": subject or f"Document: {filename}",
-            "TextPart": email_body,
-            "HTMLPart": self._body_as_rtl_html(email_body),
+            "TextPart": self._body_as_plain_text(email_body),
+            "HTMLPart": self._body_as_rtl_html(
+                email_body, effective_from_name, attached_name
+            ),
             # These are one-to-one transactional documents, not campaigns.
             # Open tracking injects a remote pixel and click tracking rewrites
             # links through Mailjet's domain – both are spam signals here, and
