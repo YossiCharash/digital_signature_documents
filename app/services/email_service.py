@@ -44,6 +44,11 @@ TEXT_COLOR = "#1f2430"
 MUTED_TEXT_COLOR = "#6b7280"
 ACCENT_BACKGROUND = "#eef2ff"
 ACCENT_BORDER = "#c7d2fe"
+# The no-reply notice gets its own amber palette so it reads as a notice
+# rather than as more footer boilerplate.
+NOTICE_BACKGROUND = "#fff7ed"
+NOTICE_BORDER = "#fdba74"
+NOTICE_TEXT = "#9a3412"
 
 # Closing notice: these documents are sent from an unattended mailbox.
 NO_REPLY_NOTICE = "הודעה זו נשלחה באופן אוטומטי – נא לא להשיב למייל זה."
@@ -306,11 +311,18 @@ class EmailService:
           </td>
         </tr>
         <tr>
-          <td style="padding:24px 28px 26px 28px;">
-            <div style="border-top:1px solid #e5e7eb;padding-top:16px;font-size:13px;
-                        line-height:1.6;color:{MUTED_TEXT_COLOR};text-align:center;">
-              {html.escape(NO_REPLY_NOTICE)}
-            </div>
+          <td style="padding:22px 28px 26px 28px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                   style="background-color:{NOTICE_BACKGROUND};border:2px solid {NOTICE_BORDER};
+                          border-radius:10px;">
+              <tr>
+                <td align="center"
+                    style="padding:16px 18px;font-size:15px;font-weight:bold;line-height:1.6;
+                           color:{NOTICE_TEXT};">
+                  <span style="font-size:17px;">&#9888;</span>&nbsp;{html.escape(NO_REPLY_NOTICE)}
+                </td>
+              </tr>
+            </table>
           </td>
         </tr>
       </table>

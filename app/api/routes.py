@@ -57,22 +57,25 @@ def _sanitize(value: str | None) -> str | None:
     return None if stripped == "" or stripped.lower() == "none" else stripped
 
 
-def _build_email_body(business_name: str | None, client_name: str | None, body: str | None) -> str:
-    """Compose the email body text."""
+def _build_email_body(business_name: str | None, body: str | None) -> str:
+    """Compose the email body text.
+
+    The sender is deliberately not named here: the email template already
+    shows the business name as its header, and it is the From name too, so
+    repeating it in the opening line read as duplication.
+    """
     body_text = (body or "").strip()
     business = (business_name or "").strip()
-    client = (client_name or "").strip()
+    intro = 'שלום רב!\n\nהמסמך מצו"ב למייל'
 
     if body_text and body_text.lower() != "none":
+        # A body that already names the business is treated as self-contained;
+        # anything else gets the standard greeting in front of it.
         if business and business not in body_text:
-            return f'שלום רב!\n\nהמסמך מ-{business} מצו"ב למייל\n\n{body_text}'
+            return f"{intro}\n\n{body_text}"
         return body_text
 
-    if business:
-        return f'שלום רב!\n\nהמסמך מ-{business} מצו"ב למייל\n\nתודה'
-    if client:
-        return f'שלום רב!\n\nהמסמך מ-{client} מצו"ב למייל\n\nתודה'
-    return 'שלום רב!\n\nהמסמך מצו"ב למייל\n\nתודה'
+    return f"{intro}\n\nתודה"
 
 _signing_service: SigningService | None = None
 _storage_service = StorageService()
@@ -129,7 +132,7 @@ async def sign_and_email(
     s3_filename = _pdf_attachment_filename(file.filename)
     print(s3_filename)
     attachment_filename = _email_attachment_filename(business_name, file.filename)
-    email_body = _build_email_body(business_name, client_name=client_name, body=body)
+    email_body = _build_email_body(business_name, body=body)
 
     logger.info(
         f"sign-and-email: business_name='{business_name}', business_email='{b_email}', email='{email}', so='{so}'"
