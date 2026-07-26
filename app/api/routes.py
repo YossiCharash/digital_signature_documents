@@ -9,6 +9,8 @@ from app.api.dependencies import (
     get_signing_service,
     get_sms_service,
     get_storage_service,
+    require_api_key,
+    require_api_key_when_configured,
 )
 from app.config import settings
 from app.services.delivery_log_service import list_deliveries, record_delivery
@@ -112,6 +114,7 @@ async def sign_and_email(
     client_name: str | None = Form(None, description="Client name for email body"),
     business_name: str | None = Form(None, description="Business name to include in email"),
     business_email: str | None = Form(None, description="Business email to also send document to"),
+    caller: str | None = Depends(require_api_key_when_configured),
     signing_svc: SigningService = Depends(get_signing_service),
     storage_svc: StorageService = Depends(get_storage_service),
     email_svc: EmailService = Depends(get_email_service),
@@ -282,6 +285,7 @@ async def sign_and_sms(
     phone: str = Form(..., description="Recipient phone number"),
     message: str | None = Form(None, description="Optional SMS message"),
     business_name: str | None = Form(None, description="Business name"),
+    caller: str | None = Depends(require_api_key_when_configured),
     signing_svc: SigningService = Depends(get_signing_service),
     storage_svc: StorageService = Depends(get_storage_service),
     sms_svc: SMSService = Depends(get_sms_service),
@@ -404,6 +408,7 @@ async def _shorten_download_url(download_url: str, tag: str) -> str:
 @router.post("/documents/verify-signature", status_code=status.HTTP_200_OK)
 async def verify_document_signature(
     file: UploadFile = File(..., description="PDF document to verify"),
+    caller: str | None = Depends(require_api_key_when_configured),
     signing_svc: SigningService = Depends(get_signing_service),
 ) -> dict:
     """Verify digital signature of a PDF document."""
@@ -427,8 +432,13 @@ async def get_deliveries(
     channel: str | None = Query(None, description="Filter by channel: 'email' or 'sms'"),
     recipient: str | None = Query(None, description="Filter by exact recipient (email/phone)"),
     limit: int = Query(100, ge=1, le=1000, description="Max rows to return"),
+    caller: str = Depends(require_api_key),
 ) -> dict:
-    """Delivery log: every send attempt with its status and, for failures, the reason."""
+    """Delivery log: every send attempt with its status and, for failures, the reason.
+
+    Always requires an API key: the response contains every recipient address
+    and phone number the service has handled.
+    """
     if delivery_status and delivery_status not in ("sent", "failed"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, detail="status must be 'sent' or 'failed'"

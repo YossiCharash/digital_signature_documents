@@ -30,6 +30,24 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     settings.ensure_directories()
 
+    # Authentication is staged so that already-distributed clients keep working
+    # (see app/api/dependencies.py). While it is off the signing and delivery
+    # endpoints are open, which must never be silent.
+    configured_keys = settings.api_key_map
+    if configured_keys:
+        logger.info(
+            "API key authentication enabled for %d caller(s): %s",
+            len(configured_keys),
+            ", ".join(sorted(configured_keys.values())),
+        )
+    else:
+        logger.warning(
+            "API_KEYS is not set: /api/v1/documents/* accepts unauthenticated "
+            "requests. Anyone who can reach this service can sign documents "
+            "with the configured key and send mail from the configured sender. "
+            "Set API_KEYS once your clients send the X-API-Key header."
+        )
+
     # Initialise URL-shortener database (optional)
     if settings.database_url:
         init_db(settings.database_url)
