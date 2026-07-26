@@ -11,6 +11,7 @@ from app.api.routes import router
 from app.api.shortlink_routes import shortlink_router
 from app.config import settings
 from app.db import create_tables, init_db
+from app.middleware import RateLimitMiddleware, RequestIDMiddleware
 from app.services.scheduler import SchedulerService
 from app.services.storage_service import StorageService
 from app.utils.logger import logger
@@ -50,21 +51,44 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown")
 
 
+# The interactive docs describe every parameter of the signing and delivery
+# endpoints, so they are served only when DEBUG is on. In production they would
+# hand any scanner a ready-made request builder.
+_docs_enabled = settings.debug
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="Send documents via email (as attachment) or SMS (link to S3 download).",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
-# CORS middleware
+# Rate limiting runs before the route handlers but after request ids are
+# assigned, so a 429 is still traceable. Starlette applies middleware in
+# reverse registration order, hence RequestIDMiddleware is added last.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    RateLimitMiddleware,
+    max_requests=settings.rate_limit_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+    trust_proxy_headers=settings.trust_proxy_headers,
 )
+app.add_middleware(RequestIDMiddleware)
+
+# CORS. This is a server-to-server API: the default is no cross-origin browser
+# access at all, and credentials are never allowed because authentication uses
+# the X-API-Key header rather than cookies.
+_cors_origins = settings.cors_origin_list
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "X-API-Key", "X-Request-ID"],
+    )
 
 # Include routers
 app.include_router(router, prefix="/api/v1")

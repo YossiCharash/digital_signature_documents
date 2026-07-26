@@ -1,7 +1,6 @@
 """Storage service for handling file uploads to S3."""
 
 import boto3
-import requests
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -30,20 +29,19 @@ class StorageService:
             return
 
         self.bucket_name = settings.s3_bucket_name
-        kwargs = {
+        # Leaving the keys as None lets boto3 fall back to its default
+        # credential chain, which is how the instance IAM role is picked up on
+        # AWS. S3_ENDPOINT_URL is only passed when set, so the default AWS
+        # endpoint still applies otherwise.
+        kwargs: dict[str, object] = {
             "region_name": settings.s3_region,
             "aws_access_key_id": settings.s3_access_key,
             "aws_secret_access_key": settings.s3_secret_key,
+            "config": Config(signature_version="s3v4"),
         }
         if settings.s3_endpoint_url:
             kwargs["endpoint_url"] = settings.s3_endpoint_url
-        self.s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=settings.s3_access_key,
-            aws_secret_access_key=settings.s3_secret_key,
-            region_name=settings.s3_region,
-            config=Config(signature_version="s3v4")
-        )
+        self.s3_client = boto3.client("s3", **kwargs)
 
     def upload_file(
             self,
@@ -95,39 +93,14 @@ class StorageService:
         try:
             url: str = self.s3_client.generate_presigned_url(
                 ClientMethod="get_object",
-                Params={"Bucket": self.bucket_name, "Key": filename, "ResponseContentDisposition": "inline"},
+                Params={
+                    "Bucket": self.bucket_name,
+                    "Key": filename,
+                    "ResponseContentDisposition": "inline",
+                },
                 ExpiresIn=expiration,
             )
-            # url = shorten_url(url)
             return url
         except ClientError as e:
             logger.error(f"Failed to generate pre-signed URL for {filename}: {e}")
             raise StorageError(f"Failed to generate pre-signed URL: {e}")
-
-
-def shorten_url(url: str) -> str:
-    # רשימת ספקים לפי סדר עדיפות
-    providers = [
-        {"name": "TinyURL", "api": "https://tinyurl.com/api-create.php", "params": {"url": url}},
-        {"name": "is.gd", "api": "https://is.gd/create.php", "params": {"url": url, "format": "simple"}}
-    ]
-
-    for provider in providers:
-        try:
-            # שימוש ב-timeout קצר כדי לא לתקוע את התוכנית אם ספק אחד איטי
-            response = requests.get(provider["api"], params=provider["params"], timeout=3)
-
-            if response.status_code == 200:
-                result = response.text.strip()
-                # בדיקה שהתגובה היא אכן URL ולא הודעת שגיאה של ה-Database
-                if result.startswith("http") and "Error" not in result:
-                    return result
-
-            print(f"Warning: {provider['name']} failed with message: {response.text[:50]}")
-
-        except requests.RequestException as e:
-            print(f"Warning: Connection to {provider['name']} failed: {e}")
-
-    # אם כל הניסיונות נכשלו, מחזירים את ה-URL המקורי
-    print("Critical: All URL shorteners failed. Returning original URL.")
-    return url
