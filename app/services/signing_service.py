@@ -1,6 +1,6 @@
 import base64
 import hashlib
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -126,8 +126,11 @@ class SigningService:
                 .issuer_name(issuer)
                 .public_key(self._private_key.public_key())
                 .serial_number(x509.random_serial_number())
-                .not_valid_before(datetime.utcnow() - timedelta(minutes=5))
-                .not_valid_after(datetime.utcnow() + timedelta(days=3650))
+                # Backdated slightly so a small clock skew on the verifying
+                # machine cannot make a freshly issued certificate look
+                # not-yet-valid.
+                .not_valid_before(datetime.now(UTC) - timedelta(minutes=5))
+                .not_valid_after(datetime.now(UTC) + timedelta(days=3650))
             )
 
             builder = builder.add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
@@ -297,7 +300,7 @@ class SigningService:
                 "contact": (settings.signature_contact or settings.signer_email),
                 "location": settings.signature_location,
                 "reason": settings.signature_reason,
-                "signingdate": datetime.utcnow().strftime("D:%Y%m%d%H%M%S+00'00'"),
+                "signingdate": datetime.now(UTC).strftime("D:%Y%m%d%H%M%S+00'00'"),
                 "signature": "Digitally Signed Document",
             }
 
@@ -383,7 +386,7 @@ class SigningService:
                         "sigflags": 3,
                         "sigflagsft": 132,
                         "sigpage": -1,
-                        "signingdate": datetime.utcnow().strftime("D:%Y%m%d%H%M%S+00'00'"),
+                        "signingdate": datetime.now(UTC).strftime("D:%Y%m%d%H%M%S+00'00'"),
                     }
                     logger.info(f"Adding DocTimeStamp using TSA: {tsa_url_used}")
                     ts_bytes = cms.timestamp(
