@@ -191,6 +191,7 @@ class SigningService:
 
         Returns PDF bytes with visual signature stamp added.
         """
+        pdf_doc = None
         try:
             pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
 
@@ -206,8 +207,8 @@ class SigningService:
                 )
                 return pdf_content
 
-            img = Image.open(signature_path)
-            img_width, img_height = img.size
+            with Image.open(signature_path) as img:
+                img_width, img_height = img.size
 
             signature_width = settings.signature_width or (img_width * 72 / 96)
             signature_height = settings.signature_height or (img_height * 72 / 96)
@@ -238,7 +239,6 @@ class SigningService:
                 page.insert_image(image_rect, filename=str(signature_path))
 
             pdf_bytes: bytes = pdf_doc.tobytes()
-            pdf_doc.close()
 
             logger.info(
                 f"Visual signature stamp added at position ({settings.signature_position_x}, {settings.signature_position_y})"
@@ -248,6 +248,11 @@ class SigningService:
         except Exception as e:
             logger.error(f"Failed to add visual signature: {e}")
             return pdf_content
+        finally:
+            # Always release PyMuPDF's native buffers, including on the error
+            # path above where the document was previously left open.
+            if pdf_doc is not None:
+                pdf_doc.close()
 
     def sign_pdf(self, pdf_content: bytes) -> tuple[bytes, dict[str, Any]]:
         """
