@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Resource limits. Each in-flight signing request holds several full copies
+    # of the PDF in memory (original + stamped + signed + base64 attachment), so
+    # both an oversized upload and too many concurrent signings are what push a
+    # small instance over its memory limit. Cap both.
+    max_upload_size_mb: int = 15
+    max_concurrent_signings: int = 2
+
     # Email
     email_provider: str = "smtp"  # smtp | ses | sendgrid | mailjet | api
     smtp_host: str | None = None

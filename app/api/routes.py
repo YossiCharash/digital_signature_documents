@@ -1,4 +1,5 @@
 """API routes: send document via email or SMS."""
+import asyncio
 import re
 from datetime import datetime
 
@@ -17,10 +18,44 @@ from app.utils.validators import validate_email, validate_phone_number
 
 router = APIRouter(tags=["documents"])
 
+# Upper bound on an accepted upload, in bytes.
+MAX_UPLOAD_BYTES = settings.max_upload_size_mb * 1024 * 1024
+
+# Bound how many signings run at once. Each one peaks at several times the PDF
+# size in RAM; unbounded concurrency is what drives the instance out of memory.
+_signing_semaphore = asyncio.Semaphore(settings.max_concurrent_signings)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _read_upload_capped(file: UploadFile) -> bytes:
+    """Read an upload fully, but refuse anything over the configured size cap.
+
+    Reads in 1 MB chunks so an oversized file is rejected as soon as it crosses
+    the limit, instead of a plain ``file.read()`` pulling the whole thing into
+    memory first (which is exactly how a single large upload can OOM the box).
+    """
+    buffer = bytearray()
+    while True:
+        try:
+            chunk = await file.read(1024 * 1024)
+        except Exception as e:
+            logger.error(f"Failed to read upload: {e}")
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
+            ) from e
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        if len(buffer) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds the {settings.max_upload_size_mb} MB limit",
+            )
+    return bytes(buffer)
 
 
 def _pdf_attachment_filename(original_filename: str) -> str:
@@ -115,13 +150,7 @@ async def sign_and_email(
     if b_email and not validate_email(b_email):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid business email address")
 
-    try:
-        content = await file.read()
-    except Exception as e:
-        logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
-        ) from e
+    content = await _read_upload_capped(file)
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -141,9 +170,15 @@ async def sign_and_email(
         f"sign-and-email: s3_filename='{s3_filename}', attachment_filename='{attachment_filename}'"
     )
 
+    # Bound peak memory: hold the signing slot for the whole heavy section
+    # (sign + S3 upload + email with base64 attachment), not just the signing.
+    await _signing_semaphore.acquire()
     try:
         signing_svc = _get_signing_service()
         signed_content, signature_data = signing_svc.sign_pdf(content)
+        # The original upload is no longer needed once we have the signed copy;
+        # drop it so it does not sit in RAM alongside signed_content + base64.
+        del content
 
         _storage_service.upload_file(
             content=signed_content,
@@ -285,6 +320,8 @@ async def sign_and_email(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error: {e}"
         ) from e
+    finally:
+        _signing_semaphore.release()
 
 
 @router.post("/documents/sign-and-sms", status_code=status.HTTP_200_OK)
@@ -300,20 +337,17 @@ async def sign_and_sms(
     if not validate_phone_number(phone):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid phone number")
 
-    try:
-        content = await file.read()
-    except Exception as e:
-        logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
-        ) from e
+    content = await _read_upload_capped(file)
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
+    # Bound peak memory: hold the signing slot for the whole heavy section.
+    await _signing_semaphore.acquire()
     try:
         signing_svc = _get_signing_service()
         signed_content, signature_data = signing_svc.sign_pdf(content)
+        del content  # original upload no longer needed once signed
 
         pdf_filename = _pdf_attachment_filename(file.filename)
         _storage_service.upload_file(
@@ -409,6 +443,8 @@ async def sign_and_sms(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"SMS delivery failed: {e}"
         ) from e
+    finally:
+        _signing_semaphore.release()
 
 
 @router.post("/documents/verify-signature", status_code=status.HTTP_200_OK)
@@ -419,13 +455,7 @@ async def verify_document_signature(
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must have a filename")
 
-    try:
-        content = await file.read()
-    except Exception as e:
-        logger.error(f"Failed to read upload: {e}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to read uploaded file"
-        ) from e
+    content = await _read_upload_capped(file)
 
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")

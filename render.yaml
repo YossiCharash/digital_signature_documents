@@ -16,6 +16,11 @@ services:
     healthCheckPath: /health
 
     envVars:
+      # Limit glibc's per-thread malloc arenas. Without this, freed memory
+      # (notably PyMuPDF's) is held in many arenas and not returned to the OS,
+      # so RSS creeps up until Render kills the instance. 2 is a safe default.
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: APP_NAME
         value: Document Delivery
       - key: APP_VERSION
