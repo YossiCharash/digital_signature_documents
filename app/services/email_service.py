@@ -421,7 +421,6 @@ class EmailService:
         reply_to: str | None,
     ) -> EmailMessage:
         """Build the MIME message shared by every delivery backend."""
-        # בניית ההודעה באמצעות האובייקט המודרני
         msg = EmailMessage(policy=policy.SMTP)
 
         # --- Sender ---
@@ -451,7 +450,8 @@ class EmailService:
             content_type = self._content_type_for(effective_filename)
             main_type, sub_type = content_type.split("/", 1)
 
-            # הוספת הקובץ - פייתון תייצר את ה-Headers הנכונים לעברית באופן אוטומטי
+            # add_attachment handles RFC 2231 encoding of the filename, so a
+            # Hebrew attachment name needs no manual header construction.
             msg.add_attachment(
                 document, maintype=main_type, subtype=sub_type, filename=effective_filename
             )
@@ -1003,7 +1003,6 @@ class EmailService:
                 server.starttls()
             if self.smtp_user and self.smtp_password:
                 server.login(self.smtp_user, self.smtp_password)
-            # EmailMessage תואם ל-send_message
             server.send_message(msg)
         finally:
             try:

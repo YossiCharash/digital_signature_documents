@@ -40,7 +40,25 @@ services:
         value: "3600"
       - key: S3_CLEANUP_RETENTION_DAYS
         value: "7"
-      # סודיים – יוגדרו ב-Dashboard (sync: false = יבקשו בהפעלה הראשונה)
+      - key: RATE_LIMIT_REQUESTS
+        value: "30"
+      - key: RATE_LIMIT_WINDOW_SECONDS
+        value: "60"
+      - key: MAX_UPLOAD_BYTES
+        value: "20971520"
+      # Render terminates TLS and rewrites X-Forwarded-For, so it can be trusted
+      # as the source of the client IP for rate limiting.
+      - key: TRUST_PROXY_HEADERS
+        value: "true"
+
+      # Secrets - set in the Render dashboard (sync: false prompts on first deploy)
+
+      # Comma-separated "label:key" pairs. While unset, the document endpoints
+      # accept unauthenticated requests so that already-distributed copies of
+      # api_client.ps1 keep working; /deliveries always requires a key. Set this
+      # once every client sends the X-API-Key header.
+      - key: API_KEYS
+        sync: false
       - key: SMTP_FROM_EMAIL
         sync: false
       - key: SMTP_FROM_NAME
@@ -51,10 +69,10 @@ services:
         sync: false
       - key: SMTP_PASSWORD
         sync: false
-      # רק כאשר EMAIL_PROVIDER=sendgrid
+      # Only when EMAIL_PROVIDER=sendgrid
       - key: SENDGRID_API_KEY
         sync: false
-      # רק כאשר EMAIL_PROVIDER=mailjet
+      # Only when EMAIL_PROVIDER=mailjet
       - key: MAILJET_API_KEY
         sync: false
       - key: MAILJET_SECRET_KEY
@@ -66,4 +84,6 @@ services:
       - key: SMS_API_KEY
         sync: false
       - key: SMS_SENDER_NAME
+        sync: false
+      - key: SMS_FROM_NUMBER
         sync: false

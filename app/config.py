@@ -22,6 +22,31 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Access control
+    # Comma-separated "label:key" pairs, e.g. "acme:s3cr3t,globex:0th3r".
+    # Labels let a single caller's key be revoked without rotating everyone
+    # else's, and identify the caller in the logs. Empty disables enforcement
+    # on the document routes (see app/api/dependencies.py) - /deliveries is
+    # never served without a key.
+    api_keys: str = ""
+
+    # Comma-separated list of allowed browser origins. Empty means no
+    # cross-origin browser access, which is correct for a server-to-server API.
+    cors_origins: str = ""
+
+    # Only trust X-Forwarded-For when a proxy that overwrites it sits in front
+    # (Render, ALB, Cloudflare). Set false for direct exposure, where the
+    # header is attacker-controlled and would defeat rate limiting.
+    trust_proxy_headers: bool = True
+
+    # Rate limit for /api/v1/documents/*. 0 disables it.
+    rate_limit_requests: int = 30
+    rate_limit_window_seconds: int = 60
+
+    # Hard cap on uploaded PDFs. Read in chunks, so this bounds memory per
+    # in-flight request rather than only rejecting after the fact.
+    max_upload_bytes: int = 20 * 1024 * 1024
+
     # Email
     email_provider: str = "smtp"  # smtp | ses | sendgrid | mailjet | api
     smtp_host: str | None = None
@@ -67,14 +92,16 @@ class Settings(BaseSettings):
 
     # SMS
     sms_provider: str = "api"
-    sms_api_url: str | None = 'https://capi.inforu.co.il/api/v2/SMS/SendSms'
+    sms_api_url: str | None = "https://capi.inforu.co.il/api/v2/SMS/SendSms"
     sms_api_key: str | None = None
     sms_sender_name: str = "נוהלים"
+    # Originating number registered with the SMS provider.
+    sms_from_number: str | None = None
 
     # S3 (required for SMS download links)
     s3_enabled: bool = False
     s3_bucket_name: str | None = None
-    s3_region: str = None
+    s3_region: str | None = None
     s3_access_key: str | None = None
     s3_secret_key: str | None = None
     s3_endpoint_url: str | None = None
@@ -83,6 +110,10 @@ class Settings(BaseSettings):
 
     # Database (optional – required for the internal URL shortener)
     database_url: str | None = None
+
+    # Short links wrap a presigned S3 URL, so they must not outlive it.
+    # Defaults to the presigned expiration when left unset.
+    short_link_expiration: int | None = None
 
     # Delivery log retention: successful sends are purged after this many days;
     # failures are kept forever so they can always be investigated.
@@ -125,6 +156,41 @@ class Settings(BaseSettings):
                 "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', or 'api'"
             )
         return v.lower()
+
+    # Comma-separated env values are parsed here rather than declared as
+    # list[str]: pydantic-settings expects JSON for complex types, which makes
+    # for an awkward value to type into a hosting dashboard.
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """Allowed browser origins, parsed from the comma-separated setting."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def api_key_map(self) -> dict[str, str]:
+        """Map of api key -> caller label, parsed from the comma-separated setting.
+
+        Entries without a label are accepted and labelled "unnamed", so a
+        single-key deployment can set API_KEYS to just the key.
+        """
+        keys: dict[str, str] = {}
+        for entry in self.api_keys.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            label, sep, key = entry.partition(":")
+            if sep:
+                label, key = label.strip(), key.strip()
+            else:
+                label, key = "unnamed", label
+            if key:
+                keys[key] = label
+        return keys
+
+    @property
+    def effective_short_link_expiration(self) -> int:
+        """Short-link lifetime, defaulting to the presigned URL's own lifetime."""
+        return self.short_link_expiration or self.s3_presigned_url_expiration
 
     def ensure_directories(self) -> None:
         Path("uploads").mkdir(parents=True, exist_ok=True)

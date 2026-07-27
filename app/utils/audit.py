@@ -1,6 +1,6 @@
 """In-memory audit log for document operations."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 _audit_log: list[dict[str, Any]] = []
@@ -15,7 +15,7 @@ def log_operation(
 ) -> None:
     """Log an operation to the audit log."""
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "operation": operation,
         "document_hash": document_hash,
         "recipient": recipient,
