@@ -1005,11 +1005,18 @@ class EmailService:
 
     @staticmethod
     def _raise_on_pulseem_error(response) -> None:  # type: ignore[no-untyped-def]
-        """Surface a per-message failure reported inside a 2xx Pulseem response.
+        """Decide accept/reject from Pulseem's SendEmail response.
 
-        Lenient by design: only raise when the body *clearly* signals failure,
-        so an unrecognised-but-successful response shape is not misread as an
-        error. Adjust the keys here if your Pulseem response uses different ones.
+        Pulseem returns an envelope like::
+
+            {"status": "Success", "error": null, "count": 1,
+             "success": 0, "failure": 0, "items": []}
+
+        In async mode the per-message ``success``/``failure`` values are COUNTS
+        that stay 0 until Pulseem processes the batch – so ``success: 0`` is not
+        a failure. The accept/reject decision comes from ``status`` and
+        ``error`` (plus any non-zero ``failure`` count), never from the
+        ``success`` count.
         """
         try:
             data = response.json()
@@ -1019,21 +1026,42 @@ class EmailService:
         if not isinstance(data, dict):
             return
 
-        # Common success/failure flags seen on this style of API.
-        for flag in ("IsSuccess", "Success", "success"):
-            if flag in data and not data[flag]:
-                detail = (
-                    data.get("ErrorMessage")
-                    or data.get("Message")
-                    or data.get("error")
-                    or str(data)[:300]
-                )
-                raise EmailDeliveryError(f"Pulseem rejected the message: {detail}")
+        error_val = data.get("error") or data.get("Error")
+        if error_val:
+            raise EmailDeliveryError(f"Pulseem rejected the message: {error_val}")
 
-        status_value = str(data.get("Status", "")).lower()
-        if status_value in ("error", "failed", "failure"):
-            detail = data.get("ErrorMessage") or data.get("Message") or str(data)[:300]
+        status_value = str(data.get("status", data.get("Status", ""))).strip().lower()
+        accepted = ("", "success", "ok", "queued", "accepted", "sent")
+        if status_value and status_value not in accepted:
+            detail = (
+                data.get("errorMessage")
+                or data.get("ErrorMessage")
+                or data.get("message")
+                or str(data)[:300]
+            )
             raise EmailDeliveryError(f"Pulseem rejected the message: {detail}")
+
+        # A non-zero failure COUNT means recipients were rejected synchronously
+        # (async sends report 0 here and are confirmed later via the report API).
+        try:
+            failure_count = int(data.get("failure", data.get("Failure", 0)) or 0)
+        except (TypeError, ValueError):
+            failure_count = 0
+        if failure_count > 0:
+            details = []
+            for item in data.get("items", data.get("Items", [])) or []:
+                if isinstance(item, dict):
+                    msg = (
+                        item.get("error")
+                        or item.get("errorMessage")
+                        or item.get("Error")
+                    )
+                    if msg:
+                        details.append(str(msg))
+            raise EmailDeliveryError(
+                f"Pulseem reported {failure_count} failed recipient(s): "
+                + ("; ".join(details) or str(data)[:300])
+            )
 
     @staticmethod
     def _pulseem_error_detail(response) -> str:  # type: ignore[no-untyped-def]
