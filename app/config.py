@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     pulseem_api_key: str | None = None
     pulseem_api_url: str = "https://api.pulseem.com/api/v1/EmailApi/SendEmail"
     pulseem_api_key_header: str = "apikey"
+    # Pulseem sends the attachment by URL (attchmentUrl), so the signed PDF is
+    # attached from its S3 presigned link. This is how long that link stays
+    # valid, kept generous so queued retries can still resolve it.
+    pulseem_attachment_url_ttl: int = 86400  # seconds (24h)
+    pulseem_language_code: int = 0  # Pulseem language code (0 = default)
+    pulseem_is_async: bool = True  # use Pulseem's own async send
 
     # SMS
     sms_provider: str = "api"

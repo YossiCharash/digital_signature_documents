@@ -47,6 +47,9 @@ class EmailQueue(Base):
     # The signed document itself. Cleared (set to NULL) once the message is sent
     # so delivered rows do not keep the payload around.
     content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # URL the document can be fetched from (used by providers that attach by
+    # URL rather than inline bytes, e.g. Pulseem's attchmentUrl).
+    attachment_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # --- Delivery state ---
     status: Mapped[str] = mapped_column(

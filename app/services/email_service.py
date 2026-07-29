@@ -211,8 +211,13 @@ class EmailService:
         body: str | None = None,
         from_name: str | None = None,
         reply_to: str | None = None,
+        attachment_url: str | None = None,
     ) -> bool:
-        """Send document as email attachment."""
+        """Send document as email attachment.
+
+        ``attachment_url`` is used only by providers that attach files by URL
+        rather than inline bytes (Pulseem); the byte-based backends ignore it.
+        """
         try:
             logger.info(
                 f"Sending document '{filename}' to {to_email} via {self.provider}"
@@ -231,7 +236,8 @@ class EmailService:
                 )
             if self.provider == "pulseem":
                 return await self._send_document_via_pulseem(
-                    to_email, document, filename, subject, body, from_name, reply_to
+                    to_email, document, filename, subject, body, from_name,
+                    reply_to, attachment_url,
                 )
             return await self._send_document_via_smtp(
                 to_email, document, filename, subject, body, from_name, reply_to
@@ -906,6 +912,7 @@ class EmailService:
         body: str | None,
         from_name: str | None,
         reply_to: str | None,
+        attachment_url: str | None = None,
     ) -> bool:
         if not self.pulseem_api_key:
             raise EmailDeliveryError("PULSEEM_API_KEY is not configured.")
@@ -917,8 +924,18 @@ class EmailService:
                 "to an address authorised in your Pulseem account."
             )
 
+        # Pulseem attaches files by URL (attchmentUrl), not inline bytes. The
+        # caller must supply a fetchable URL for the document (our S3 presigned
+        # link); without it the recipient would get the mail with no attachment.
+        if document and not (attachment_url and attachment_url.strip()):
+            raise EmailDeliveryError(
+                "Pulseem attaches documents by URL; no attachment_url was "
+                "provided for the document. Ensure S3 is enabled so a presigned "
+                "URL can be generated."
+            )
+
         payload = self._build_pulseem_payload(
-            to_email, document, filename, subject, body, from_name, reply_to
+            to_email, filename, subject, body, from_name, reply_to, attachment_url
         )
         # The API key goes in a header (name configurable; defaults to "apikey").
         headers = {
@@ -940,55 +957,51 @@ class EmailService:
     def _build_pulseem_payload(
         self,
         to_email: str,
-        document: bytes,
         filename: str,
         subject: str | None,
         body: str | None,
         from_name: str | None,
         reply_to: str | None,
+        attachment_url: str | None,
     ) -> dict:
         """Build the JSON body for Pulseem's EmailApi/SendEmail endpoint.
 
-        ┌───────────────────────────────────────────────────────────────────┐
-        │ VERIFY THESE FIELD NAMES against your Pulseem Swagger              │
-        │ (POST /api/v1/EmailApi/SendEmail). The network policy blocks the   │
-        │ docs host from this environment, so the field names below are the  │
-        │ integration's single point of uncertainty. Everything else (async  │
-        │ transport, retries, success/failure handling, queue + suppression) │
-        │ is provider-independent and confirmed. If a name differs, fix it   │
-        │ here only – no other code changes are needed.                      │
-        └───────────────────────────────────────────────────────────────────┘
+        Pulseem uses parallel arrays keyed by recipient index; for a one-to-one
+        send every array has a single element. Attachments are referenced by URL
+        via ``attchmentUrl`` (Pulseem's own spelling), and ``isAsync`` hands the
+        send off to Pulseem's asynchronous pipeline.
         """
+        import uuid
+
         email_body = body or f"Please find attached: {filename}."
         effective_from_name = self._effective_from_name(from_name)
-        attached_name = (filename or "document.pdf") if document else None
+        html = self._body_as_rtl_html(email_body, effective_from_name, filename)
+        ref = uuid.uuid4().hex
 
-        payload: dict = {
-            "FromEmail": self.smtp_from_email,
-            "FromName": effective_from_name or DEFAULT_EMAIL_TITLE,
-            "Subject": subject or f"Document: {filename}",
-            "To": [{"Email": to_email}],
-            "Html": self._body_as_rtl_html(
-                email_body, effective_from_name, attached_name
-            ),
-            "Text": self._body_as_plain_text(email_body),
+        email_send_data: dict = {
+            "fromEmail": self.smtp_from_email,
+            "fromName": effective_from_name or DEFAULT_EMAIL_TITLE,
+            "languageCode": settings.pulseem_language_code,
+            "subject": [subject or f"Document: {filename}"],
+            "html": [html],
+            "toEmails": [to_email],
+            "toNames": [""],
+            "externalRef": [ref],
         }
-
         if reply_to and reply_to.strip():
-            payload["ReplyTo"] = reply_to.strip()
+            # Pulseem has no dedicated reply-to on this endpoint; the From
+            # identity carries replies. Kept here so a future field is a
+            # one-line change.
+            pass
+        if attachment_url and attachment_url.strip():
+            email_send_data["attchmentUrl"] = [attachment_url.strip()]
 
-        if document:
-            effective_filename = filename or "document.pdf"
-            payload["Attachments"] = [
-                {
-                    "FileName": effective_filename,
-                    "ContentType": self._content_type_for(effective_filename),
-                    # Base64-encoded file content.
-                    "Content": base64.b64encode(document).decode("ascii"),
-                }
-            ]
-
-        return payload
+        return {
+            "sendId": ref,
+            "isAsync": settings.pulseem_is_async,
+            "sendTime": "",  # empty = send immediately
+            "emailSendData": email_send_data,
+        }
 
     @staticmethod
     def _raise_on_pulseem_error(response) -> None:  # type: ignore[no-untyped-def]
