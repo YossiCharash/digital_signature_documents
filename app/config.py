@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     ses_access_key: str | None = None
     ses_secret_key: str | None = None
     ses_configuration_set: str | None = None  # optional SES configuration set
+    # Verify the signature on inbound SNS bounce/complaint webhooks. Keep true
+    # in production so forged events cannot poison the suppression list; may be
+    # disabled only for local testing.
+    ses_sns_verify_signatures: bool = True
 
     # SendGrid (used when email_provider="sendgrid"). Delivery goes over the
     # Web API v3 (HTTPS) rather than SMTP, so it also works on hosts that block
@@ -64,6 +68,20 @@ class Settings(BaseSettings):
     mailjet_api_url: str = "https://api.mailjet.com/v3.1/send"
     # When true Mailjet validates the request but never delivers.
     mailjet_sandbox_mode: bool = False
+
+    # Pulseem (used when email_provider="pulseem"). Israeli provider, Send API
+    # over HTTPS. smtp_from_email must be an authorised sender in the Pulseem
+    # account. The API key is sent in a header whose name defaults to "apikey";
+    # override pulseem_api_key_header if the account uses a different scheme.
+    pulseem_api_key: str | None = None
+    pulseem_api_url: str = "https://api.pulseem.com/api/v1/EmailApi/SendEmail"
+    pulseem_api_key_header: str = "apikey"
+    # Pulseem sends the attachment by URL (attchmentUrl), so the signed PDF is
+    # attached from its S3 presigned link. This is how long that link stays
+    # valid, kept generous so queued retries can still resolve it.
+    pulseem_attachment_url_ttl: int = 86400  # seconds (24h)
+    pulseem_language_code: int = 0  # Pulseem language code (0 = default)
+    pulseem_is_async: bool = True  # use Pulseem's own async send
 
     # SMS
     sms_provider: str = "api"
@@ -87,6 +105,20 @@ class Settings(BaseSettings):
     # Delivery log retention: successful sends are purged after this many days;
     # failures are kept forever so they can always be investigated.
     delivery_log_success_retention_days: int = 2
+
+    # Asynchronous email queue (durable outbox). When DATABASE_URL is set, the
+    # sign-and-email endpoint enqueues the message and returns 202 immediately;
+    # a background worker sends it and records the real outcome. Without a
+    # database the endpoint falls back to sending inline (the old behaviour).
+    email_queue_enabled: bool = True
+    email_queue_poll_seconds: int = 10  # how often the worker looks for work
+    email_queue_batch_size: int = 10  # rows claimed per worker tick
+    email_queue_max_attempts: int = 5  # send attempts before a row is marked failed
+    # Backoff between retries grows as base * 2**(attempt-1), capped at max.
+    email_queue_retry_base_seconds: int = 60
+    email_queue_retry_max_seconds: int = 3600
+    # Sent rows are kept (for status lookups) this many days, then purged.
+    email_queue_sent_retention_days: int = 2
 
     # Signing
     private_key_pem: str | None = None
@@ -120,9 +152,10 @@ class Settings(BaseSettings):
     @field_validator("email_provider")
     @classmethod
     def _email_provider(cls, v: str) -> str:
-        if v.lower() not in ("smtp", "api", "ses", "sendgrid", "mailjet"):
+        if v.lower() not in ("smtp", "api", "ses", "sendgrid", "mailjet", "pulseem"):
             raise ValueError(
-                "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', or 'api'"
+                "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', "
+                "'pulseem', or 'api'"
             )
         return v.lower()
 

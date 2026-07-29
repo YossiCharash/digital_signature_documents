@@ -2,14 +2,26 @@
 import re
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 
 from app.config import settings
 from app.services.delivery_log_service import list_deliveries, record_delivery
+from app.services.email_queue_service import (
+    enqueue_email,
+    get_email_job,
+    is_queue_enabled,
+    list_email_jobs,
+)
 from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
 from app.services.sms_service import SMSDeliveryError, SMSService
 from app.services.storage_service import StorageError, StorageService
+from app.services.suppression_service import (
+    add_manual,
+    is_suppressed,
+    list_suppressed,
+    unsuppress,
+)
 from app.services.url_shortener_service import create_short_link
 from app.utils.audit import log_operation
 from app.utils.logger import logger
@@ -94,6 +106,7 @@ def _get_signing_service() -> SigningService:
 
 @router.post("/documents/sign-and-email", status_code=status.HTTP_200_OK)
 async def sign_and_email(
+    response: Response,
     file: UploadFile = File(..., description="PDF document to sign and send"),
     email: str = Form(..., description="Recipient email"),
     subject: str | None = Form(None, description="Email subject"),
@@ -161,6 +174,107 @@ async def sign_and_email(
 
         email_subject = effective_subject or f"מסמך חתום: {attachment_filename}"
 
+        # Pulseem attaches documents by URL, not inline bytes. Give it a
+        # longer-lived presigned link than the display download_url so queued
+        # retries can still resolve the attachment. Other providers ignore this.
+        attachment_url: str | None = None
+        if _email_service.provider == "pulseem":
+            try:
+                attachment_url = _storage_service.generate_presigned_url(
+                    s3_filename, expiration=settings.pulseem_attachment_url_ttl
+                )
+            except StorageError as e:
+                logger.error(f"Could not generate Pulseem attachment URL: {e}")
+
+        if is_queue_enabled():
+            # --- Asynchronous path -------------------------------------------
+            # Enqueue the message(s) and return 202 immediately. A background
+            # worker sends them and records the real "sent"/"failed" outcome to
+            # the delivery log only once the provider actually accepts the mail,
+            # so a slow or throttled provider can never tie up this request.
+            client_job_id = await enqueue_email(
+                to_email=email,
+                document=signed_content,
+                filename=attachment_filename,
+                subject=email_subject,
+                body=email_body,
+                from_name=business_name,
+                reply_to=b_email,
+                recipient_type="client",
+                attachment_url=attachment_url,
+            )
+            business_job_id = None
+            if b_email:
+                business_job_id = await enqueue_email(
+                    to_email=b_email,
+                    document=signed_content,
+                    filename=attachment_filename,
+                    subject=email_subject,
+                    body=email_body,
+                    from_name=business_name,
+                    reply_to=b_email,
+                    recipient_type="business",
+                    attachment_url=attachment_url,
+                )
+                logger.info(f"Queued business email copy (id={business_job_id}) for {b_email}")
+            else:
+                logger.warning(
+                    "business_email not provided or empty (after sanitize), skipping business copy"
+                )
+
+            log_operation(
+                operation="sign-and-email",
+                document_hash=signature_data["hash"],
+                recipient=email,
+                filename=attachment_filename,
+                metadata={
+                    "s3_key": s3_filename,
+                    "signature": signature_data["signature"],
+                    "email_job_id": client_job_id,
+                    **({"business_email": b_email} if b_email else {}),
+                    **({"business_name": business_name} if business_name else {}),
+                },
+            )
+
+            base = settings.api_url.rstrip("/")
+            response.status_code = status.HTTP_202_ACCEPTED
+            return {
+                "status": "queued",
+                "delivery": "email",
+                "recipient": email,
+                "filename": attachment_filename,
+                "s3_key": s3_filename,
+                "download_url": download_url,
+                "email_job_id": client_job_id,
+                "status_url": (
+                    f"{base}/api/v1/emails/{client_job_id}" if client_job_id else None
+                ),
+                "signature": {
+                    "hash": signature_data["hash"],
+                    "algorithm": signature_data["algorithm"],
+                },
+                **({"business_recipient": b_email} if b_email else {}),
+                **(
+                    {"business_email_job_id": business_job_id}
+                    if business_job_id
+                    else {}
+                ),
+            }
+
+        # --- Synchronous fallback (no database configured) -------------------
+        if await is_suppressed(email):
+            reason = "recipient is on the suppression list (prior bounce/complaint)"
+            await record_delivery(
+                channel="email",
+                recipient=email,
+                recipient_type="client",
+                filename=attachment_filename,
+                subject=email_subject,
+                status="failed",
+                error=reason,
+            )
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason)
+
         logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
         try:
             await _email_service.send_document(
@@ -171,6 +285,7 @@ async def sign_and_email(
                 body=email_body,
                 from_name=business_name,
                 reply_to=b_email,
+                attachment_url=attachment_url,
             )
         except EmailDeliveryError as e:
             await record_delivery(
@@ -197,7 +312,20 @@ async def sign_and_email(
         # business copy must NOT fail the whole request (that would make callers
         # retry and double-send to the client). Report it as a partial status.
         business_email_status: str | None = None
-        if b_email:
+        if b_email and await is_suppressed(b_email):
+            business_email_status = "failed"
+            reason = "business address is on the suppression list (prior bounce/complaint)"
+            logger.warning("Skipping suppressed business email %s", b_email)
+            await record_delivery(
+                channel="email",
+                recipient=b_email,
+                recipient_type="business",
+                filename=attachment_filename,
+                subject=email_subject,
+                status="failed",
+                error=reason,
+            )
+        elif b_email:
             logger.info(f"Sending document copy to business email: {b_email}")
             try:
                 await _email_service.send_document(
@@ -208,6 +336,7 @@ async def sign_and_email(
                     body=email_body,
                     from_name=business_name,
                     reply_to=b_email,
+                    attachment_url=attachment_url,
                 )
                 business_email_status = "sent"
                 logger.info(f"Successfully sent document copy to business email: {b_email}")
@@ -468,4 +597,86 @@ async def get_deliveries(
         status=delivery_status, channel=channel, recipient=recipient, limit=limit
     )
     return {"count": len(entries), "deliveries": entries}
+
+
+@router.get("/emails/{job_id}", status_code=status.HTTP_200_OK)
+async def get_email_job_status(job_id: int) -> dict:
+    """Status of a single queued email: queued | sending | sent | failed.
+
+    Returned by sign-and-email as ``status_url`` so callers can confirm the
+    message was actually delivered (not merely accepted for queuing).
+    """
+    if not is_queue_enabled():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Async email queue requires DATABASE_URL to be configured",
+        )
+    job = await get_email_job(job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Email job not found")
+    return job
+
+
+@router.get("/emails", status_code=status.HTTP_200_OK)
+async def get_email_jobs(
+    email_status: str | None = Query(
+        None, alias="status", description="Filter: queued | sending | sent | failed"
+    ),
+    limit: int = Query(100, ge=1, le=1000, description="Max rows to return"),
+) -> dict:
+    """List queued/sent/failed email jobs, newest first."""
+    if not is_queue_enabled():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Async email queue requires DATABASE_URL to be configured",
+        )
+    valid = ("queued", "sending", "sent", "failed")
+    if email_status and email_status not in valid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"status must be one of {', '.join(valid)}",
+        )
+    jobs = await list_email_jobs(status=email_status, limit=limit)
+    return {"count": len(jobs), "jobs": jobs}
+
+
+@router.get("/suppressions", status_code=status.HTTP_200_OK)
+async def get_suppressions(
+    reason: str | None = Query(
+        None, description="Filter by reason: bounce | complaint | manual"
+    ),
+    limit: int = Query(100, ge=1, le=1000, description="Max rows to return"),
+) -> dict:
+    """Addresses we no longer email (hard bounces, complaints, manual opt-outs)."""
+    valid = ("bounce", "complaint", "manual")
+    if reason and reason not in valid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"reason must be one of {', '.join(valid)}",
+        )
+    entries = await list_suppressed(reason=reason, limit=limit)
+    return {"count": len(entries), "suppressions": entries}
+
+
+@router.post("/suppressions", status_code=status.HTTP_201_CREATED)
+async def add_suppression(
+    email: str = Form(..., description="Address to suppress"),
+    note: str | None = Form(None, description="Optional reason/note"),
+) -> dict:
+    """Manually suppress an address (e.g. the recipient asked to stop)."""
+    if not validate_email(email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid email address")
+    added = await add_manual(email, detail=note)
+    return {"email": email.strip().lower(), "suppressed": True, "newly_added": added}
+
+
+@router.delete("/suppressions/{email}", status_code=status.HTTP_200_OK)
+async def remove_suppression(email: str) -> dict:
+    """Remove an address from the suppression list (false positive / recovery)."""
+    removed = await unsuppress(email)
+    if not removed:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail="Address was not on the suppression list"
+        )
+    return {"email": email.strip().lower(), "removed": True}
 
