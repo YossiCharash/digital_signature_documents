@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     # When true Mailjet validates the request but never delivers.
     mailjet_sandbox_mode: bool = False
 
+    # Pulseem (used when email_provider="pulseem"). Israeli provider, Send API
+    # over HTTPS. smtp_from_email must be an authorised sender in the Pulseem
+    # account. The API key is sent in a header whose name defaults to "apikey";
+    # override pulseem_api_key_header if the account uses a different scheme.
+    pulseem_api_key: str | None = None
+    pulseem_api_url: str = "https://api.pulseem.com/api/v1/EmailApi/SendEmail"
+    pulseem_api_key_header: str = "apikey"
+
     # SMS
     sms_provider: str = "api"
     sms_api_url: str | None = 'https://capi.inforu.co.il/api/v2/SMS/SendSms'
@@ -138,9 +146,10 @@ class Settings(BaseSettings):
     @field_validator("email_provider")
     @classmethod
     def _email_provider(cls, v: str) -> str:
-        if v.lower() not in ("smtp", "api", "ses", "sendgrid", "mailjet"):
+        if v.lower() not in ("smtp", "api", "ses", "sendgrid", "mailjet", "pulseem"):
             raise ValueError(
-                "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', or 'api'"
+                "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', "
+                "'pulseem', or 'api'"
             )
         return v.lower()
 

@@ -29,7 +29,7 @@ SMTP_RETRY_BACKOFF = 2  # seconds, multiplied by attempt number
 PLACEHOLDER_FROM_EMAIL = "noreply@example.com"
 
 # Providers that require the From address to be a verified sender identity.
-VERIFIED_SENDER_PROVIDERS = ("ses", "sendgrid", "mailjet")
+VERIFIED_SENDER_PROVIDERS = ("ses", "sendgrid", "mailjet", "pulseem")
 
 # HTTP timeout (seconds) for the JSON-API providers (SendGrid, Mailjet).
 HTTP_API_TIMEOUT = 30
@@ -89,6 +89,8 @@ class EmailService:
         mailjet_secret_key: str | None = None,
         mailjet_api_url: str | None = None,
         mailjet_sandbox_mode: bool | None = None,
+        pulseem_api_key: str | None = None,
+        pulseem_api_url: str | None = None,
     ):
         self.provider = provider or settings.email_provider
         self.smtp_host = smtp_host or settings.smtp_host
@@ -141,6 +143,13 @@ class EmailService:
             else settings.mailjet_sandbox_mode
         )
 
+        # Pulseem Send API (Israeli provider).
+        self.pulseem_api_key = self._clean_secret(
+            pulseem_api_key or settings.pulseem_api_key
+        )
+        self.pulseem_api_url = (pulseem_api_url or settings.pulseem_api_url or "").strip()
+        self.pulseem_api_key_header = (settings.pulseem_api_key_header or "apikey").strip()
+
         # Fail-fast heads-up: the placeholder sender is not a verified sender
         # identity, so every send would be rejected. Warn loudly at startup
         # instead of only discovering it on the first failed request.
@@ -170,6 +179,12 @@ class EmailService:
                     "the API key ID rather than the key itself. SendGrid will "
                     "reject it with 401."
                 )
+
+        if self.provider == "pulseem" and not self.pulseem_api_key:
+            logger.warning(
+                "EMAIL_PROVIDER=pulseem but PULSEEM_API_KEY is not set; "
+                "every send will fail."
+            )
 
         if self.provider == "mailjet" and not (
             self.mailjet_api_key and self.mailjet_secret_key
@@ -212,6 +227,10 @@ class EmailService:
                 )
             if self.provider == "mailjet":
                 return await self._send_document_via_mailjet(
+                    to_email, document, filename, subject, body, from_name, reply_to
+                )
+            if self.provider == "pulseem":
+                return await self._send_document_via_pulseem(
                     to_email, document, filename, subject, body, from_name, reply_to
                 )
             return await self._send_document_via_smtp(
@@ -876,6 +895,144 @@ class EmailService:
                     details.append(text)
         if details:
             return "; ".join(details)
+        return response.text[:500]
+
+    async def _send_document_via_pulseem(
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
+    ) -> bool:
+        if not self.pulseem_api_key:
+            raise EmailDeliveryError("PULSEEM_API_KEY is not configured.")
+
+        from_email = (self.smtp_from_email or "").strip()
+        if not from_email or from_email.lower() == PLACEHOLDER_FROM_EMAIL:
+            raise EmailDeliveryError(
+                "Pulseem requires a verified sender address; set SMTP_FROM_EMAIL "
+                "to an address authorised in your Pulseem account."
+            )
+
+        payload = self._build_pulseem_payload(
+            to_email, document, filename, subject, body, from_name, reply_to
+        )
+        # The API key goes in a header (name configurable; defaults to "apikey").
+        headers = {
+            "Content-Type": "application/json",
+            self.pulseem_api_key_header: self.pulseem_api_key,
+        }
+        response = await self._post_json_with_retry(
+            "Pulseem",
+            self.pulseem_api_url,
+            payload,
+            headers=headers,
+            detail_fn=self._pulseem_error_detail,
+        )
+        # A 2xx can still carry a per-message failure in the body.
+        self._raise_on_pulseem_error(response)
+        logger.info(f"Document '{filename}' sent via Pulseem to {to_email}")
+        return True
+
+    def _build_pulseem_payload(
+        self,
+        to_email: str,
+        document: bytes,
+        filename: str,
+        subject: str | None,
+        body: str | None,
+        from_name: str | None,
+        reply_to: str | None,
+    ) -> dict:
+        """Build the JSON body for Pulseem's EmailApi/SendEmail endpoint.
+
+        ┌───────────────────────────────────────────────────────────────────┐
+        │ VERIFY THESE FIELD NAMES against your Pulseem Swagger              │
+        │ (POST /api/v1/EmailApi/SendEmail). The network policy blocks the   │
+        │ docs host from this environment, so the field names below are the  │
+        │ integration's single point of uncertainty. Everything else (async  │
+        │ transport, retries, success/failure handling, queue + suppression) │
+        │ is provider-independent and confirmed. If a name differs, fix it   │
+        │ here only – no other code changes are needed.                      │
+        └───────────────────────────────────────────────────────────────────┘
+        """
+        email_body = body or f"Please find attached: {filename}."
+        effective_from_name = self._effective_from_name(from_name)
+        attached_name = (filename or "document.pdf") if document else None
+
+        payload: dict = {
+            "FromEmail": self.smtp_from_email,
+            "FromName": effective_from_name or DEFAULT_EMAIL_TITLE,
+            "Subject": subject or f"Document: {filename}",
+            "To": [{"Email": to_email}],
+            "Html": self._body_as_rtl_html(
+                email_body, effective_from_name, attached_name
+            ),
+            "Text": self._body_as_plain_text(email_body),
+        }
+
+        if reply_to and reply_to.strip():
+            payload["ReplyTo"] = reply_to.strip()
+
+        if document:
+            effective_filename = filename or "document.pdf"
+            payload["Attachments"] = [
+                {
+                    "FileName": effective_filename,
+                    "ContentType": self._content_type_for(effective_filename),
+                    # Base64-encoded file content.
+                    "Content": base64.b64encode(document).decode("ascii"),
+                }
+            ]
+
+        return payload
+
+    @staticmethod
+    def _raise_on_pulseem_error(response) -> None:  # type: ignore[no-untyped-def]
+        """Surface a per-message failure reported inside a 2xx Pulseem response.
+
+        Lenient by design: only raise when the body *clearly* signals failure,
+        so an unrecognised-but-successful response shape is not misread as an
+        error. Adjust the keys here if your Pulseem response uses different ones.
+        """
+        try:
+            data = response.json()
+        except Exception:
+            return  # Non-JSON 2xx – treat as accepted.
+
+        if not isinstance(data, dict):
+            return
+
+        # Common success/failure flags seen on this style of API.
+        for flag in ("IsSuccess", "Success", "success"):
+            if flag in data and not data[flag]:
+                detail = (
+                    data.get("ErrorMessage")
+                    or data.get("Message")
+                    or data.get("error")
+                    or str(data)[:300]
+                )
+                raise EmailDeliveryError(f"Pulseem rejected the message: {detail}")
+
+        status_value = str(data.get("Status", "")).lower()
+        if status_value in ("error", "failed", "failure"):
+            detail = data.get("ErrorMessage") or data.get("Message") or str(data)[:300]
+            raise EmailDeliveryError(f"Pulseem rejected the message: {detail}")
+
+    @staticmethod
+    def _pulseem_error_detail(response) -> str:  # type: ignore[no-untyped-def]
+        """Extract Pulseem's error text, falling back to the raw body."""
+        try:
+            data = response.json()
+        except Exception:
+            return response.text[:500]
+        if isinstance(data, dict):
+            for key in ("ErrorMessage", "Message", "error", "Error"):
+                if data.get(key):
+                    return str(data[key])
         return response.text[:500]
 
     def _get_ses_client(self):  # type: ignore[no-untyped-def]
