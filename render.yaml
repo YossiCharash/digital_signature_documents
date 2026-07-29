@@ -41,6 +41,12 @@ services:
       - key: S3_CLEANUP_RETENTION_DAYS
         value: "7"
       # סודיים – יוגדרו ב-Dashboard (sync: false = יבקשו בהפעלה הראשונה)
+      # DATABASE_URL מפעיל את תור המיילים האסינכרוני (ואת מקצר ה-URL).
+      # ללא DB – השליחה תיפול חזרה למצב סינכרוני. השתמש ב-Postgres מנוהל
+      # (Neon / Supabase / Render Postgres). כל סכמה (postgres:// או
+      # postgresql://) מנורמלת אוטומטית ל-asyncpg בקוד.
+      - key: DATABASE_URL
+        sync: false
       - key: SMTP_FROM_EMAIL
         sync: false
       - key: SMTP_FROM_NAME

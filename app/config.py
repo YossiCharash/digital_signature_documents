@@ -88,6 +88,20 @@ class Settings(BaseSettings):
     # failures are kept forever so they can always be investigated.
     delivery_log_success_retention_days: int = 2
 
+    # Asynchronous email queue (durable outbox). When DATABASE_URL is set, the
+    # sign-and-email endpoint enqueues the message and returns 202 immediately;
+    # a background worker sends it and records the real outcome. Without a
+    # database the endpoint falls back to sending inline (the old behaviour).
+    email_queue_enabled: bool = True
+    email_queue_poll_seconds: int = 10  # how often the worker looks for work
+    email_queue_batch_size: int = 10  # rows claimed per worker tick
+    email_queue_max_attempts: int = 5  # send attempts before a row is marked failed
+    # Backoff between retries grows as base * 2**(attempt-1), capped at max.
+    email_queue_retry_base_seconds: int = 60
+    email_queue_retry_max_seconds: int = 3600
+    # Sent rows are kept (for status lookups) this many days, then purged.
+    email_queue_sent_retention_days: int = 2
+
     # Signing
     private_key_pem: str | None = None
     private_key_path: str | None = None
