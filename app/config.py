@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     ses_access_key: str | None = None
     ses_secret_key: str | None = None
     ses_configuration_set: str | None = None  # optional SES configuration set
+    # Verify the signature on inbound SNS bounce/complaint webhooks. Keep true
+    # in production so forged events cannot poison the suppression list; may be
+    # disabled only for local testing.
+    ses_sns_verify_signatures: bool = True
 
     # SendGrid (used when email_provider="sendgrid"). Delivery goes over the
     # Web API v3 (HTTPS) rather than SMTP, so it also works on hosts that block

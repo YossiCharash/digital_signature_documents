@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import router
 from app.api.shortlink_routes import shortlink_router
+from app.api.webhook_routes import webhook_router
 from app.config import settings
 from app.db import create_tables, init_db
 from app.services.scheduler import SchedulerService
@@ -69,6 +70,7 @@ app.add_middleware(
 # Include routers
 app.include_router(router, prefix="/api/v1")
 app.include_router(shortlink_router)  # GET /r/{slug} – no prefix so URLs stay short
+app.include_router(webhook_router)  # POST /webhooks/ses – SES bounce/complaint feedback
 
 
 @app.exception_handler(RequestValidationError)

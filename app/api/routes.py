@@ -16,6 +16,12 @@ from app.services.email_service import EmailDeliveryError, EmailService
 from app.services.signing_service import SigningError, SigningService
 from app.services.sms_service import SMSDeliveryError, SMSService
 from app.services.storage_service import StorageError, StorageService
+from app.services.suppression_service import (
+    add_manual,
+    is_suppressed,
+    list_suppressed,
+    unsuppress,
+)
 from app.services.url_shortener_service import create_short_link
 from app.utils.audit import log_operation
 from app.utils.logger import logger
@@ -242,6 +248,19 @@ async def sign_and_email(
             }
 
         # --- Synchronous fallback (no database configured) -------------------
+        if await is_suppressed(email):
+            reason = "recipient is on the suppression list (prior bounce/complaint)"
+            await record_delivery(
+                channel="email",
+                recipient=email,
+                recipient_type="client",
+                filename=attachment_filename,
+                subject=email_subject,
+                status="failed",
+                error=reason,
+            )
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=reason)
+
         logger.info(f"Sending email to client: {email}, from_name: '{business_name}'")
         try:
             await _email_service.send_document(
@@ -278,7 +297,20 @@ async def sign_and_email(
         # business copy must NOT fail the whole request (that would make callers
         # retry and double-send to the client). Report it as a partial status.
         business_email_status: str | None = None
-        if b_email:
+        if b_email and await is_suppressed(b_email):
+            business_email_status = "failed"
+            reason = "business address is on the suppression list (prior bounce/complaint)"
+            logger.warning("Skipping suppressed business email %s", b_email)
+            await record_delivery(
+                channel="email",
+                recipient=b_email,
+                recipient_type="business",
+                filename=attachment_filename,
+                subject=email_subject,
+                status="failed",
+                error=reason,
+            )
+        elif b_email:
             logger.info(f"Sending document copy to business email: {b_email}")
             try:
                 await _email_service.send_document(
@@ -590,4 +622,45 @@ async def get_email_jobs(
         )
     jobs = await list_email_jobs(status=email_status, limit=limit)
     return {"count": len(jobs), "jobs": jobs}
+
+
+@router.get("/suppressions", status_code=status.HTTP_200_OK)
+async def get_suppressions(
+    reason: str | None = Query(
+        None, description="Filter by reason: bounce | complaint | manual"
+    ),
+    limit: int = Query(100, ge=1, le=1000, description="Max rows to return"),
+) -> dict:
+    """Addresses we no longer email (hard bounces, complaints, manual opt-outs)."""
+    valid = ("bounce", "complaint", "manual")
+    if reason and reason not in valid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"reason must be one of {', '.join(valid)}",
+        )
+    entries = await list_suppressed(reason=reason, limit=limit)
+    return {"count": len(entries), "suppressions": entries}
+
+
+@router.post("/suppressions", status_code=status.HTTP_201_CREATED)
+async def add_suppression(
+    email: str = Form(..., description="Address to suppress"),
+    note: str | None = Form(None, description="Optional reason/note"),
+) -> dict:
+    """Manually suppress an address (e.g. the recipient asked to stop)."""
+    if not validate_email(email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid email address")
+    added = await add_manual(email, detail=note)
+    return {"email": email.strip().lower(), "suppressed": True, "newly_added": added}
+
+
+@router.delete("/suppressions/{email}", status_code=status.HTTP_200_OK)
+async def remove_suppression(email: str) -> dict:
+    """Remove an address from the suppression list (false positive / recovery)."""
+    removed = await unsuppress(email)
+    if not removed:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail="Address was not on the suppression list"
+        )
+    return {"email": email.strip().lower(), "removed": True}
 

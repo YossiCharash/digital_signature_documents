@@ -167,8 +167,32 @@ async def process_pending_emails(email_service: EmailService | None = None) -> i
 async def _send_claimed_row(service: EmailService, row: EmailQueue) -> None:
     """Send one claimed row and persist the outcome (sent / retry / failed)."""
     from app.db import async_session_factory
+    from app.services.suppression_service import is_suppressed
 
     assert async_session_factory is not None
+
+    # Never send to an address that previously hard-bounced or complained: doing
+    # so is what erodes sending reputation and gets accounts blocked.
+    if await is_suppressed(row.to_email):
+        reason = "recipient is on the suppression list (prior bounce/complaint)"
+        async with async_session_factory() as db:
+            await db.execute(
+                update(EmailQueue)
+                .where(EmailQueue.id == row.id)
+                .values(status=STATUS_FAILED, last_error=reason, content=None)
+            )
+            await db.commit()
+        await record_delivery(
+            channel="email",
+            recipient=row.to_email,
+            recipient_type=row.recipient_type,
+            filename=row.filename,
+            subject=row.subject,
+            status="failed",
+            error=reason,
+        )
+        logger.warning("Skipped suppressed recipient %s (id=%s)", row.to_email, row.id)
+        return
 
     try:
         await service.send_document(

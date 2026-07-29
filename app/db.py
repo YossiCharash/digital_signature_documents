@@ -45,6 +45,9 @@ async def create_tables() -> None:
     from app.models.delivery_log import DeliveryLog  # noqa: F401 – registers model with metadata
     from app.models.email_queue import EmailQueue  # noqa: F401 – registers model with metadata
     from app.models.short_link import ShortLink  # noqa: F401 – registers model with metadata
+    from app.models.suppressed_email import (
+        SuppressedEmail,  # noqa: F401 – registers model with metadata
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
