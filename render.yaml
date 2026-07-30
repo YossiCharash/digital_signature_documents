@@ -25,11 +25,7 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: EMAIL_PROVIDER
-        value: smtp
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USE_TLS
-        value: "true"
+        value: ses
       - key: SMS_PROVIDER
         value: api
       - key: S3_ENABLED
@@ -47,23 +43,21 @@ services:
       # postgresql://) מנורמלת אוטומטית ל-asyncpg בקוד.
       - key: DATABASE_URL
         sync: false
+      # SMTP_FROM_EMAIL / SMTP_FROM_NAME are the SES sender identity (From).
+      # SMTP_FROM_EMAIL must be a verified SES identity.
       - key: SMTP_FROM_EMAIL
         sync: false
       - key: SMTP_FROM_NAME
         sync: false
-      - key: SMTP_HOST
+      # Amazon SES. On AWS with an instance role the keys can be left unset.
+      - key: SES_REGION
         sync: false
-      - key: SMTP_USER
+      - key: SES_ACCESS_KEY
         sync: false
-      - key: SMTP_PASSWORD
+      - key: SES_SECRET_KEY
         sync: false
-      # רק כאשר EMAIL_PROVIDER=sendgrid
-      - key: SENDGRID_API_KEY
-        sync: false
-      # רק כאשר EMAIL_PROVIDER=mailjet
-      - key: MAILJET_API_KEY
-        sync: false
-      - key: MAILJET_SECRET_KEY
+      # Optional SES Configuration Set for bounce/complaint event publishing.
+      - key: SES_CONFIGURATION_SET
         sync: false
       - key: S3_BUCKET_NAME
         sync: false

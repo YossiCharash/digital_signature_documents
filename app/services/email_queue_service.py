@@ -44,7 +44,6 @@ async def enqueue_email(
     from_name: str | None = None,
     reply_to: str | None = None,
     recipient_type: str | None = None,
-    attachment_url: str | None = None,
 ) -> int | None:
     """Persist an email to send. Returns the queue row id, or None if disabled."""
     from app.db import async_session_factory
@@ -61,7 +60,6 @@ async def enqueue_email(
         from_name=from_name,
         reply_to=reply_to,
         content=document,
-        attachment_url=attachment_url,
         status=STATUS_QUEUED,
         max_attempts=settings.email_queue_max_attempts,
         next_attempt_at=datetime.now(UTC),
@@ -205,7 +203,6 @@ async def _send_claimed_row(service: EmailService, row: EmailQueue) -> None:
             body=row.body,
             from_name=row.from_name,
             reply_to=row.reply_to,
-            attachment_url=row.attachment_url,
         )
     except Exception as exc:  # EmailDeliveryError and anything unexpected
         await _handle_send_failure(row, exc)
