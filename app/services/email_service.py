@@ -66,7 +66,9 @@ class EmailService:
 
         # Sender identity (the From address/name), shared with the signing
         # config. For SES this MUST be a verified identity.
-        self.smtp_from_email = smtp_from_email or settings.smtp_from_email
+        self.smtp_from_email = self._sanitize_address(
+            smtp_from_email or settings.smtp_from_email
+        )
         self.smtp_from_name = smtp_from_name or settings.smtp_from_name
 
         # Amazon SES – region falls back to the S3 region, then to boto3's
@@ -282,6 +284,17 @@ class EmailService:
         encoded_filename = str(Header(filename, "utf-8"))
         return f'attachment; filename="{encoded_filename}"'
 
+    @staticmethod
+    def _sanitize_address(addr: str | None) -> str:
+        """Strip surrounding whitespace and any control chars from an address.
+
+        A stray newline/tab in an address makes SES reject the send with
+        "Domain contains illegal character" and enables header injection, so we
+        remove them before the address reaches SES (Source/Destinations) or the
+        MIME headers.
+        """
+        return re.sub(r"[\r\n\t\x00-\x1f\x7f]", "", (addr or "").strip())
+
     def _effective_from_name(self, from_name: str | None) -> str:
         """Per-request sender name, falling back to the configured default.
 
@@ -355,6 +368,10 @@ class EmailService:
                 "SES requires a verified sender address; set SMTP_FROM_EMAIL to a "
                 "verified SES identity."
             )
+
+        # Clean the recipient too: a trailing newline in Destinations makes SES
+        # reject the whole send with "Domain contains illegal character".
+        to_email = self._sanitize_address(to_email)
 
         msg = self._build_message(
             to_email, document, filename, subject, body, from_name, reply_to
