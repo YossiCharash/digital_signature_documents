@@ -22,24 +22,17 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # Email
-    email_provider: str = "smtp"  # smtp | ses | sendgrid | mailjet | api
-    smtp_host: str | None = None
-    smtp_port: int = 587
-    smtp_user: str | None = None
-    smtp_password: str | None = None
-    smtp_use_tls: bool = True
-    # Sender identity. Has defaults so the app can start without configuration;
-    # for SES this MUST be overridden with a verified SES identity.
+    # Email – delivery is via Amazon SES only.
+    email_provider: str = "ses"  # ses
+    # Sender identity (the From address/name). MUST be a verified SES identity.
+    # The "smtp_" prefix is kept for backward compatibility with existing env
+    # vars (SMTP_FROM_EMAIL / SMTP_FROM_NAME); it is the SES sender.
     smtp_from_email: str = "noreply@example.com"
     smtp_from_name: str = "Document Delivery"
-    email_api_url: str | None = None
-    email_api_key: str | None = None
 
-    # Amazon SES (used when email_provider="ses"). On AWS (App Runner/ECS/EC2)
-    # leave the keys empty to use the instance IAM role; boto3 resolves
-    # credentials automatically. The From address (smtp_from_email) must be a
-    # verified SES identity in this region.
+    # Amazon SES. On AWS (App Runner/ECS/EC2) leave the keys empty to use the
+    # instance IAM role; boto3 resolves credentials automatically. The From
+    # address (smtp_from_email) must be a verified SES identity in this region.
     ses_region: str | None = None  # falls back to s3_region, then AWS default
     ses_access_key: str | None = None
     ses_secret_key: str | None = None
@@ -48,40 +41,6 @@ class Settings(BaseSettings):
     # in production so forged events cannot poison the suppression list; may be
     # disabled only for local testing.
     ses_sns_verify_signatures: bool = True
-
-    # SendGrid (used when email_provider="sendgrid"). Delivery goes over the
-    # Web API v3 (HTTPS) rather than SMTP, so it also works on hosts that block
-    # outbound SMTP ports. smtp_from_email must be a verified SendGrid sender
-    # (Single Sender or an address on an authenticated domain).
-    sendgrid_api_key: str | None = None
-    sendgrid_api_url: str = "https://api.sendgrid.com/v3/mail/send"
-    # When true SendGrid validates the request but never delivers – useful for
-    # testing the integration without sending real mail.
-    sendgrid_sandbox_mode: bool = False
-
-    # Mailjet (used when email_provider="mailjet"). Both keys come from the same
-    # row in the Mailjet dashboard under Account > API Key Management; they are
-    # sent as HTTP Basic credentials. smtp_from_email must be an authorised
-    # sender under Account > Sender domains & addresses.
-    mailjet_api_key: str | None = None
-    mailjet_secret_key: str | None = None
-    mailjet_api_url: str = "https://api.mailjet.com/v3.1/send"
-    # When true Mailjet validates the request but never delivers.
-    mailjet_sandbox_mode: bool = False
-
-    # Pulseem (used when email_provider="pulseem"). Israeli provider, Send API
-    # over HTTPS. smtp_from_email must be an authorised sender in the Pulseem
-    # account. The API key is sent in a header whose name defaults to "apikey";
-    # override pulseem_api_key_header if the account uses a different scheme.
-    pulseem_api_key: str | None = None
-    pulseem_api_url: str = "https://api.pulseem.com/api/v1/EmailApi/SendEmail"
-    pulseem_api_key_header: str = "apikey"
-    # Pulseem sends the attachment by URL (attchmentUrl), so the signed PDF is
-    # attached from its S3 presigned link. This is how long that link stays
-    # valid, kept generous so queued retries can still resolve it.
-    pulseem_attachment_url_ttl: int = 86400  # seconds (24h)
-    pulseem_language_code: int = 0  # Pulseem language code (0 = default)
-    pulseem_is_async: bool = True  # use Pulseem's own async send
 
     # SMS
     sms_provider: str = "api"
@@ -152,12 +111,11 @@ class Settings(BaseSettings):
     @field_validator("email_provider")
     @classmethod
     def _email_provider(cls, v: str) -> str:
-        if v.lower() not in ("smtp", "api", "ses", "sendgrid", "mailjet", "pulseem"):
-            raise ValueError(
-                "email_provider must be 'smtp', 'ses', 'sendgrid', 'mailjet', "
-                "'pulseem', or 'api'"
-            )
-        return v.lower()
+        # Delivery is SES-only. Any legacy value (smtp/sendgrid/mailjet/…) is
+        # coerced to "ses" so an old EMAIL_PROVIDER env var can't break startup.
+        if v.lower() != "ses":
+            return "ses"
+        return "ses"
 
     def ensure_directories(self) -> None:
         Path("uploads").mkdir(parents=True, exist_ok=True)

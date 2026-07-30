@@ -174,18 +174,6 @@ async def sign_and_email(
 
         email_subject = effective_subject or f"מסמך חתום: {attachment_filename}"
 
-        # Pulseem attaches documents by URL, not inline bytes. Give it a
-        # longer-lived presigned link than the display download_url so queued
-        # retries can still resolve the attachment. Other providers ignore this.
-        attachment_url: str | None = None
-        if _email_service.provider == "pulseem":
-            try:
-                attachment_url = _storage_service.generate_presigned_url(
-                    s3_filename, expiration=settings.pulseem_attachment_url_ttl
-                )
-            except StorageError as e:
-                logger.error(f"Could not generate Pulseem attachment URL: {e}")
-
         if is_queue_enabled():
             # --- Asynchronous path -------------------------------------------
             # Enqueue the message(s) and return 202 immediately. A background
@@ -201,7 +189,6 @@ async def sign_and_email(
                 from_name=business_name,
                 reply_to=b_email,
                 recipient_type="client",
-                attachment_url=attachment_url,
             )
             business_job_id = None
             if b_email:
@@ -214,7 +201,6 @@ async def sign_and_email(
                     from_name=business_name,
                     reply_to=b_email,
                     recipient_type="business",
-                    attachment_url=attachment_url,
                 )
                 logger.info(f"Queued business email copy (id={business_job_id}) for {b_email}")
             else:
@@ -285,7 +271,6 @@ async def sign_and_email(
                 body=email_body,
                 from_name=business_name,
                 reply_to=b_email,
-                attachment_url=attachment_url,
             )
         except EmailDeliveryError as e:
             await record_delivery(
@@ -336,7 +321,6 @@ async def sign_and_email(
                     body=email_body,
                     from_name=business_name,
                     reply_to=b_email,
-                    attachment_url=attachment_url,
                 )
                 business_email_status = "sent"
                 logger.info(f"Successfully sent document copy to business email: {b_email}")
