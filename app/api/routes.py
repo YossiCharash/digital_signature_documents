@@ -119,6 +119,9 @@ async def sign_and_email(
     """Sign PDF, upload to S3, and send email with the signed document attached."""
     if not file.filename:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="File must have a filename")
+    # Trim surrounding whitespace/newlines the caller may have sent: a trailing
+    # newline makes SES reject the send with "Domain contains illegal character".
+    email = (email or "").strip()
     if not validate_email(email):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid email address")
 

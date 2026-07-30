@@ -7,7 +7,9 @@ def validate_email(email: str) -> bool:
     """Validate email address format."""
     if not email or not isinstance(email, str):
         return False
-    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+    # \Z (not $) so a trailing newline can't sneak through: in Python $ also
+    # matches just before a final '\n', which would let "user@host\n" validate.
+    pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\Z"
     return bool(re.match(pattern, email))
 
 
