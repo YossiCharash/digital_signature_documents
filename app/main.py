@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     scheduler_service.shutdown()
+    # Release the pooled SMS HTTP client's sockets cleanly.
+    from app.api.routes import _sms_service
+
+    await _sms_service.aclose()
     logger.info("Application shutdown")
 
 
