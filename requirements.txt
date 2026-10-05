@@ -13,6 +13,10 @@ Pillow>=10.0.0
 apscheduler>=3.10.4
 pytz>=2024.1
 types-pytz>=2024.1
-# URL shortener (optional – required only when DATABASE_URL is set)
-sqlalchemy>=2.0.0
+# URL shortener + async email queue (required when DATABASE_URL is set).
+# The [asyncio] extra pulls in greenlet, which SQLAlchemy's async engine needs;
+# a plain `sqlalchemy` install does not guarantee it on every interpreter, so it
+# is also pinned explicitly to keep the deploy from failing at import time.
+sqlalchemy[asyncio]>=2.0.0
+greenlet>=3.0.3
 asyncpg>=0.29.0
