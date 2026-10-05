@@ -82,8 +82,11 @@ class SigningService:
     def sign_document(self, document: bytes) -> dict[str, Any]:
 
         try:
-            document_hash = hashlib.sha256(document).digest()
-            hash_hex = hashlib.sha256(document).hexdigest()
+            # Hash the document once and derive both forms from the same digest
+            # (hashing a large PDF twice is wasted CPU on every request).
+            _digest = hashlib.sha256(document)
+            document_hash = _digest.digest()
+            hash_hex = _digest.hexdigest()
 
             signature = self._private_key.sign(
                 document_hash,
@@ -192,8 +195,8 @@ class SigningService:
         Returns PDF bytes with visual signature stamp added.
         """
         try:
-            pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
-
+            # Resolve the stamp path *before* opening the PDF, so the
+            # not-found early return cannot leak an open fitz document.
             signature_path = Path(settings.signature_image_path)
             if not signature_path.is_absolute() and not signature_path.exists():
                 _app_root = Path(__file__).resolve().parent.parent.parent
@@ -206,39 +209,48 @@ class SigningService:
                 )
                 return pdf_content
 
-            img = Image.open(signature_path)
-            img_width, img_height = img.size
+            # Only the dimensions are needed here (insert_image re-reads the
+            # file itself); close the image handle immediately so we do not leak
+            # a file descriptor per request under load.
+            with Image.open(signature_path) as img:
+                img_width, img_height = img.size
 
             signature_width = settings.signature_width or (img_width * 72 / 96)
             signature_height = settings.signature_height or (img_height * 72 / 96)
 
-            if settings.signature_page == -1:
-                pages_list: list[int] = list(range(len(pdf_doc)))
-            else:
-                if settings.signature_page >= len(pdf_doc):
-                    logger.warning(
-                        f"Signature page {settings.signature_page} exceeds PDF pages, using last page"
-                    )
-                    pages_list = [len(pdf_doc) - 1]
+            # try/finally guarantees the native fitz document is released even
+            # if page handling raises midway – otherwise every failure would
+            # leak memory.
+            pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
+            try:
+                if settings.signature_page == -1:
+                    pages_list: list[int] = list(range(len(pdf_doc)))
                 else:
-                    pages_list = [settings.signature_page]
+                    if settings.signature_page >= len(pdf_doc):
+                        logger.warning(
+                            f"Signature page {settings.signature_page} exceeds PDF pages, using last page"
+                        )
+                        pages_list = [len(pdf_doc) - 1]
+                    else:
+                        pages_list = [settings.signature_page]
 
-            for page_num in pages_list:
-                page = pdf_doc[page_num]
+                for page_num in pages_list:
+                    page = pdf_doc[page_num]
 
-                page_rect = page.rect
+                    page_rect = page.rect
 
-                x0 = settings.signature_position_x
-                y0 = page_rect.height - settings.signature_position_y - signature_height
-                x1 = x0 + signature_width
-                y1 = y0 + signature_height
+                    x0 = settings.signature_position_x
+                    y0 = page_rect.height - settings.signature_position_y - signature_height
+                    x1 = x0 + signature_width
+                    y1 = y0 + signature_height
 
-                image_rect = fitz.Rect(x0, y0, x1, y1)
+                    image_rect = fitz.Rect(x0, y0, x1, y1)
 
-                page.insert_image(image_rect, filename=str(signature_path))
+                    page.insert_image(image_rect, filename=str(signature_path))
 
-            pdf_bytes: bytes = pdf_doc.tobytes()
-            pdf_doc.close()
+                pdf_bytes: bytes = pdf_doc.tobytes()
+            finally:
+                pdf_doc.close()
 
             logger.info(
                 f"Visual signature stamp added at position ({settings.signature_position_x}, {settings.signature_position_y})"
@@ -419,8 +431,9 @@ class SigningService:
         Returns True if signature is valid, False otherwise.
         """
         try:
-            document_hash = hashlib.sha256(document).digest()
-            calculated_hash = hashlib.sha256(document).hexdigest()
+            _digest = hashlib.sha256(document)
+            document_hash = _digest.digest()
+            calculated_hash = _digest.hexdigest()
 
             if calculated_hash != hash_value:
                 return False

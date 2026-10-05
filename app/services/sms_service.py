@@ -26,6 +26,26 @@ class SMSService:
         self.api_url = api_url or settings.sms_api_url
         self.api_key = api_key or settings.sms_api_key
         self.sender_name = sender_name or settings.sms_sender_name
+        self._http_client: httpx.AsyncClient | None = None
+
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Lazily create (and reuse) a pooled httpx client for the SMS API.
+
+        Reused for the process lifetime so each SMS does not open a new TLS
+        connection; closed by :meth:`aclose` on application shutdown.
+        """
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=30.0,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._http_client
+
+    async def aclose(self) -> None:
+        """Close the pooled HTTP client. Safe to call multiple times."""
+        if self._http_client is not None and not self._http_client.is_closed:
+            await self._http_client.aclose()
+        self._http_client = None
 
     async def send_document_link(
             self,
@@ -61,7 +81,6 @@ class SMSService:
         sms_message = f"שלום, המסמך שלך מ-{business_name} מוכן להורדה."
         if document_url:
             sms_message += f"\nלהורדה: {document_url}"
-        print(sms_message)
 
         payload = {
             "sendId": self.api_key,
@@ -80,7 +99,6 @@ class SMSService:
                 "isAutomaticUnsubscribeLink": "false"
             }
         }
-        print(sms_message)
 
         headers = {
             "APIKey": self.api_key,
@@ -92,89 +110,89 @@ class SMSService:
         logger.debug(f"Headers: {list(headers.keys())}")
         logger.debug(f"Payload: {payload}")
 
-        async with httpx.AsyncClient() as client:
-            last_error = None
-            try:
-                response = await client.post(
-                    self.api_url, json=payload, headers=headers, timeout=30.0
-                )
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                # If 403/401, try different authentication formats
-                if e.response.status_code in (401, 403):
-                    # Try 1: Authorization header without Bearer (if we used X-API-Key)
-                    if "X-API-Key" in headers:
-                        logger.debug("X-API-Key failed, trying Authorization header without Bearer")
-                        headers_retry = {
-                            "Authorization": self.api_key,  # Direct key, no Bearer prefix
-                            "Content-Type": "application/json",
-                        }
-                        try:
-                            response = await client.post(
-                                self.api_url, json=payload, headers=headers_retry, timeout=30.0
-                            )
-                            response.raise_for_status()
-                            # Success with retry, continue normally
-                            last_error = None
-                        except httpx.HTTPStatusError as retry_error:
-                            last_error = retry_error
-                            # Try 2: Authorization header with Bearer token
-                            if last_error.response.status_code in (401, 403):
-                                logger.debug(
-                                    "Authorization without Bearer failed, trying with Bearer token"
-                                )
-                                headers_retry2 = {
-                                    "Authorization": f"Bearer {self.api_key}",
-                                    "Content-Type": "application/json",
-                                }
-                                try:
-                                    response = await client.post(
-                                        self.api_url,
-                                        json=payload,
-                                        headers=headers_retry2,
-                                        timeout=30.0,
-                                    )
-                                    response.raise_for_status()
-                                    # Success with retry, continue normally
-                                    last_error = None
-                                except httpx.HTTPStatusError as retry_error2:
-                                    last_error = retry_error2
-            except httpx.RequestError as e:
-                logger.error(f"SMS API request failed: {e}")
-                raise SMSDeliveryError(f"SMS API request failed: {e}") from e
-
-            # If we still have an error, handle it
-            if last_error:
-                error_detail = f"Status {last_error.response.status_code}"
-                try:
-                    error_body = last_error.response.json()
-                    if isinstance(error_body, dict):
-                        error_msg = (
-                                error_body.get("message") or error_body.get("error") or str(error_body)
-                        )
-                        error_detail = f"{error_detail}: {error_msg}"
-                    else:
-                        error_detail = f"{error_detail}: {error_body}"
-                except Exception:
-                    # If response is not JSON, try text
+        client = await self._get_http_client()
+        last_error = None
+        try:
+            response = await client.post(
+                self.api_url, json=payload, headers=headers, timeout=30.0
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            # If 403/401, try different authentication formats
+            if e.response.status_code in (401, 403):
+                # Try 1: Authorization header without Bearer (if we used X-API-Key)
+                if "X-API-Key" in headers:
+                    logger.debug("X-API-Key failed, trying Authorization header without Bearer")
+                    headers_retry = {
+                        "Authorization": self.api_key,  # Direct key, no Bearer prefix
+                        "Content-Type": "application/json",
+                    }
                     try:
-                        error_text = last_error.response.text[:500]  # Limit to first 500 chars
-                        if error_text:
-                            error_detail = f"{error_detail}: {error_text}"
-                    except Exception:
-                        pass
+                        response = await client.post(
+                            self.api_url, json=payload, headers=headers_retry, timeout=30.0
+                        )
+                        response.raise_for_status()
+                        # Success with retry, continue normally
+                        last_error = None
+                    except httpx.HTTPStatusError as retry_error:
+                        last_error = retry_error
+                        # Try 2: Authorization header with Bearer token
+                        if last_error.response.status_code in (401, 403):
+                            logger.debug(
+                                "Authorization without Bearer failed, trying with Bearer token"
+                            )
+                            headers_retry2 = {
+                                "Authorization": f"Bearer {self.api_key}",
+                                "Content-Type": "application/json",
+                            }
+                            try:
+                                response = await client.post(
+                                    self.api_url,
+                                    json=payload,
+                                    headers=headers_retry2,
+                                    timeout=30.0,
+                                )
+                                response.raise_for_status()
+                                # Success with retry, continue normally
+                                last_error = None
+                            except httpx.HTTPStatusError as retry_error2:
+                                last_error = retry_error2
+        except httpx.RequestError as e:
+            logger.error(f"SMS API request failed: {e}")
+            raise SMSDeliveryError(f"SMS API request failed: {e}") from e
 
-                logger.error(
-                    f"SMS delivery failed: {error_detail}. "
-                    f"URL: {self.api_url}, "
-                    f"Check your SMS_API_KEY and SMS_API_URL configuration."
-                )
-                raise SMSDeliveryError(
-                    f"SMS delivery failed: {error_detail}. "
-                    f"Please verify your SMS_API_KEY and SMS_API_URL are correct. "
-                    f"For 403 Forbidden errors, check API key permissions and authentication format."
-                ) from last_error
+        # If we still have an error, handle it
+        if last_error:
+            error_detail = f"Status {last_error.response.status_code}"
+            try:
+                error_body = last_error.response.json()
+                if isinstance(error_body, dict):
+                    error_msg = (
+                            error_body.get("message") or error_body.get("error") or str(error_body)
+                    )
+                    error_detail = f"{error_detail}: {error_msg}"
+                else:
+                    error_detail = f"{error_detail}: {error_body}"
+            except Exception:
+                # If response is not JSON, try text
+                try:
+                    error_text = last_error.response.text[:500]  # Limit to first 500 chars
+                    if error_text:
+                        error_detail = f"{error_detail}: {error_text}"
+                except Exception:
+                    pass
+
+            logger.error(
+                f"SMS delivery failed: {error_detail}. "
+                f"URL: {self.api_url}, "
+                f"Check your SMS_API_KEY and SMS_API_URL configuration."
+            )
+            raise SMSDeliveryError(
+                f"SMS delivery failed: {error_detail}. "
+                f"Please verify your SMS_API_KEY and SMS_API_URL are correct. "
+                f"For 403 Forbidden errors, check API key permissions and authentication format."
+            ) from last_error
 
         logger.info("SMS with document link sent successfully")
         return True
